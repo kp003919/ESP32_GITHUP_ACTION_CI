@@ -2,37 +2,36 @@ import serial
 import time
 import json
 import re
-import sys
+import pytest
 
 PORT = "COM7"
 BAUD = 115200
 
-# Open serial port
-ser = serial.Serial(PORT, BAUD, timeout=1)
-time.sleep(2)  # Allow ESP32 to reboot after flashing
+
+# --------------------------
+# Pytest Fixtures
+# --------------------------
+
+@pytest.fixture(scope="session")
+def ser():
+    """Open serial port once per test session."""
+    s = serial.Serial(PORT, BAUD, timeout=1)
+    time.sleep(2)  # allow ESP32 reboot
+    yield s
+    s.close()
 
 
 # --------------------------
-# Assertion helpers
+# Helper functions
 # --------------------------
-
-def assert_true(cond, msg):
-    if not cond:
-        raise AssertionError(msg)
-
 
 def extract_json(line):
     match = re.search(r"\{.*\}", line)
-    if not match:
-        raise AssertionError(f"Invalid JSON in response: {line}")
+    assert match, f"Invalid JSON in response: {line}"
     return json.loads(match.group(0))
 
 
-# --------------------------
-# Command sender with timing
-# --------------------------
-
-def send_test(cmd, max_ms=300):
+def send_test(ser, cmd, max_ms=300):
     ser.reset_input_buffer()
     start = time.time()
     ser.write((cmd + "\n").encode())
@@ -44,66 +43,56 @@ def send_test(cmd, max_ms=300):
             latency = (time.time() - start) * 1000
             return line, latency
 
-    raise AssertionError(f"No response for command '{cmd}' within {max_ms} ms")
-
+    pytest.fail(f"No response for command '{cmd}' within {max_ms} ms")
+    
 
 # --------------------------
-# Test suite
+# Test Cases
 # --------------------------
-print(">>> USING UPDATED SCRIPT WITH TIMING <<<")
 
-print("\nRunning PING...")
-resp, latency = send_test("PING", max_ms=150)
-print("Response:", resp, f"(latency {latency:.1f} ms)")
-assert_true("PONG" in resp, "PING failed")
-assert_true(latency < 150, "PING too slow")
+def test_ping(ser):
+    resp, latency = send_test(ser, "PING", max_ms=150)
+    assert "PONG" in resp
+    assert latency < 150
 
 
-print("\nRunning TEST_UPTIME...")
-resp, latency = send_test("TEST_UPTIME", max_ms=200)
-print("Response:", resp, f"(latency {latency:.1f} ms)")
-parts = resp.split()
-assert_true(parts[-1].isdigit(), "UPTIME missing numeric value")
-uptime = int(parts[-1])
-assert_true(uptime > 0, "UPTIME must be positive")
-assert_true(latency < 200, "UPTIME response too slow")
+def test_uptime(ser):
+    resp, latency = send_test(ser, "TEST_UPTIME", max_ms=200)
+    parts = resp.split()
+    assert parts[-1].isdigit()
+    uptime = int(parts[-1])
+    assert uptime > 0
+    assert latency < 200
 
 
-print("\nRunning TEST_DHT...")
-resp, latency = send_test("TEST_DHT", max_ms=500)
-print("Response:", resp, f"(latency {latency:.1f} ms)")
-dht = extract_json(resp)
-assert_true("temperature" in dht, "DHT missing temperature")
-assert_true("humidity" in dht, "DHT missing humidity")
-assert_true(-20 <= dht["temperature"] <= 80, "Temperature out of range")
-assert_true(0 <= dht["humidity"] <= 100, "Humidity out of range")
-assert_true(latency < 500, "DHT read too slow")
+def test_dht(ser):
+    resp, latency = send_test(ser, "TEST_DHT", max_ms=500)
+    dht = extract_json(resp)
+    assert "temperature" in dht
+    assert "humidity" in dht
+    assert -20 <= dht["temperature"] <= 80
+    assert 0 <= dht["humidity"] <= 100
+    assert latency < 500
 
 
-print("\nRunning TEST_GPS...")
-resp, latency = send_test("TEST_GPS", max_ms=300)
-print("Response:", resp, f"(latency {latency:.1f} ms)")
-gps = extract_json(resp)
-assert_true("lat" in gps and "lon" in gps, "GPS missing coordinates")
-assert_true(-90 <= gps["lat"] <= 90, "Invalid latitude")
-assert_true(-180 <= gps["lon"] <= 180, "Invalid longitude")
-assert_true(latency < 300, "GPS response too slow")
+def test_gps(ser):
+    resp, latency = send_test(ser, "TEST_GPS", max_ms=300)
+    gps = extract_json(resp)
+    assert "lat" in gps and "lon" in gps
+    assert -90 <= gps["lat"] <= 90
+    assert -180 <= gps["lon"] <= 180
+    assert latency < 300
 
 
-print("\nRunning TEST_RTLS...")
-resp, latency = send_test("TEST_RTLS", max_ms=300)
-print("Response:", resp, f"(latency {latency:.1f} ms)")
-rtls = extract_json(resp)
-assert_true("rtls" in rtls, "RTLS missing list")
-assert_true(isinstance(rtls["rtls"], list), "RTLS must be a list")
-assert_true(latency < 300, "RTLS response too slow")
+def test_rtls(ser):
+    resp, latency = send_test(ser, "TEST_RTLS", max_ms=300)
+    rtls = extract_json(resp)
+    assert "rtls" in rtls
+    assert isinstance(rtls["rtls"], list)
+    assert latency < 300
 
 
-print("\nRunning TEST_PULSE...")
-resp, latency = send_test("TEST_PULSE", max_ms=200)
-print("Response:", resp, f"(latency {latency:.1f} ms)")
-assert_true("PULSE_DONE" in resp, "Pulse test did not complete")
-assert_true(latency < 200, "Pulse test too slow")
-
-
-print("\nAll tests passed successfully.")
+def test_pulse(ser):
+    resp, latency = send_test(ser, "TEST_PULSE", max_ms=200)
+    assert "PULSE_DONE" in resp
+    assert latency < 200
