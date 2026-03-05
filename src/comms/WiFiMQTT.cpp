@@ -26,6 +26,8 @@
 #include <WiFiClient.h>
 #include <PubSubClient.h>
 
+// MQTT Broker settings
+
 // ------------------------------------------------------
 // NODE-RED ONLY
 // ------------------------------------------------------
