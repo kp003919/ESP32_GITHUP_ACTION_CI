@@ -38,4 +38,4 @@ jobs:
         run: pio run -t upload --upload-port COM7
 
       - name: Run HIL tests
-        run: python3 test_esp32.py
+        run: python test_esp32.py
