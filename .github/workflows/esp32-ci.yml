@@ -1,0 +1,41 @@
+name: ESP32 CI with HIL
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: firmware
+          path: .pio/build/*/firmware.bin
+
+  hil_test:
+    needs: build
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: firmware
+          path: firmware/
+
+      - name: Flash ESP32
+        run: pio run -t upload --upload-port /dev/ttyUSB0
+
+      - name: Run HIL tests
+        run: python3 test_esp32.py
