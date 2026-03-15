@@ -1,3 +1,4 @@
+pyserial
 pytest
 pytest-mock
 pytest-timeout
