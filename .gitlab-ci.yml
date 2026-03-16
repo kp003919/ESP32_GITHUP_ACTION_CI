@@ -4,26 +4,47 @@ variables:
 stages:
   - test
 
-test_job:
+# -----------------------------
+# 1) CI TESTS (run in GitLab)
+# -----------------------------
+ci_tests:
   stage: test
   image: python:3.11
 
   before_script:
+    - pip install --upgrade pip
     - pip install -r requirements.txt
 
   script:
     - echo "=== CI DIRECTORY STRUCTURE ==="
     - ls -R .
-    # Generate JUnit XML report for GitLab Test Reports
     - pytest -m "not hil" -v --junitxml=report.xml
 
   artifacts:
-    # GitLab will parse this and show a Test Report tab
     reports:
       junit: report.xml
-
-    # Optional: keep the raw report for download
     paths:
       - report.xml
+    expire_in: 1 week
 
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/pip
+
+# -----------------------------------------
+# 2) HIL TESTS (run ONLY on your laptop)
+# -----------------------------------------
+hil_tests:
+  stage: test
+  tags:
+    - esp32        # This ensures GitLab sends the job to YOUR laptop
+  script:
+    - pytest -m hil -v --junitxml=hil_report.xml
+
+  artifacts:
+    reports:
+      junit: hil_report.xml
+    paths:
+      - hil_report.xml
     expire_in: 1 week
