@@ -9,12 +9,7 @@ pipeline {
             }
         }
 
-        stage('Install PlatformIO') {
-            steps {
-                sh 'pip3 install -U platformio'
-            }
-        }
-
+        
         stage('Build HIL Firmware') {
             steps {
                 sh 'pio run -e hil_test'
