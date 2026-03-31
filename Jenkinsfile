@@ -1,6 +1,12 @@
 pipeline {
     agent { label 'hil' }
-    
+
+    environment {
+        VENV = "${WORKSPACE}/venv"
+        PIO = "${WORKSPACE}/venv/bin/platformio"
+        PYTEST = "${WORKSPACE}/venv/bin/pytest"
+    }
+
     stages {
 
         stage('Checkout') {
@@ -9,23 +15,41 @@ pipeline {
             }
         }
 
-        
+        stage('Setup PlatformIO Environment') {
+            steps {
+                sh '''
+                    # Create venv if it doesn't exist
+                    if [ ! -d "$VENV" ]; then
+                        python3 -m venv $VENV
+                        $VENV/bin/pip install --upgrade pip
+                        $VENV/bin/pip install platformio pytest
+                    fi
+                '''
+            }
+        }
+
         stage('Build HIL Firmware') {
             steps {
-                sh 'pio run -e hil_test'
+                sh '''
+                    $PIO run -e hil_test
+                '''
             }
         }
 
         stage('Upload Firmware') {
             steps {
-                sh 'pio run -e hil_test -t upload'
+                sh '''
+                    $PIO run -e hil_test -t upload
+                '''
                 sleep 3
             }
         }
 
         stage('Run HIL Tests') {
             steps {
-                sh 'pytest --junitxml=pytest-report.xml'
+                sh '''
+                    $PYTEST --junitxml=pytest-report.xml
+                '''
             }
         }
     }
