@@ -18,7 +18,6 @@ pipeline {
         stage('Setup PlatformIO Environment') {
             steps {
                 sh '''
-                    # Create venv if it doesn't exist
                     if [ ! -d "$VENV" ]; then
                         python3 -m venv $VENV
                         $VENV/bin/pip install --upgrade pip
@@ -56,7 +55,10 @@ pipeline {
 
     post {
         always {
-            junit 'pytest-report.xml'
+            // Ensure junit runs INSIDE the agent context
+            node('hil') {
+                junit 'pytest-report.xml'
+            }
         }
     }
 }
