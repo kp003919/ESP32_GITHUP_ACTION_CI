@@ -14,16 +14,8 @@ jobs:
       - name: Clean workspace
         shell: powershell
         run: |
-<<<<<<< HEAD
-<<<<<<< HEAD
           Set-Location $env:GITHUB_WORKSPACE
           Set-Location ..
-=======
->>>>>>> bda9e33f374c395cc4ba7b668f99f055379cfbf8
-=======
-          Set-Location $env:GITHUB_WORKSPACE
-          Set-Location ..
->>>>>>> 17c5fc7e0921a5a0d8f23ff113490809b9dc713d
           Remove-Item -Recurse -Force * -ErrorAction SilentlyContinue
 
       - name: Checkout repository
@@ -68,19 +60,7 @@ jobs:
         shell: powershell
         run: |
           Start-Sleep -Seconds 30
-<<<<<<< HEAD
-=======
 
       - name: Run HIL tests
         run: |
           pytest -v
-<<<<<<< HEAD
-
-      
->>>>>>> bda9e33f374c395cc4ba7b668f99f055379cfbf8
-
-      - name: Run HIL tests
-        run: |
-          pytest -v
-=======
->>>>>>> 17c5fc7e0921a5a0d8f23ff113490809b9dc713d
