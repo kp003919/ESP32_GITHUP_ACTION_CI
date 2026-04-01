@@ -11,6 +11,13 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      - name: Clean workspace
+        shell: powershell
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          Set-Location ..
+          Remove-Item -Recurse -Force * -ErrorAction SilentlyContinue
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -44,15 +51,15 @@ jobs:
           pio run -e hil_test -t upload
 
       - name: Start Mosquitto MQTT broker
-          shell: powershell
+        shell: powershell
         run: |
-           Start-Process -FilePath "C:\Program Files\mosquitto\mosquitto.exe" `
-             -ArgumentList '-c "C:\Program Files\mosquitto\mosquitto_local.conf" -v'
-
+          Start-Process -FilePath "C:\Program Files\mosquitto\mosquitto.exe" `
+            -ArgumentList '-c "C:\Program Files\mosquitto\mosquitto_local.conf" -v'
 
       - name: Wait for ESP32 reboot
+        shell: powershell
         run: |
-          timeout /t 5
+          Start-Sleep -Seconds 30
 
       - name: Run HIL tests
         run: |
