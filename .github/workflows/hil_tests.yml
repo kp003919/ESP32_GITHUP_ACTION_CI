@@ -37,7 +37,7 @@ jobs:
 
       - name: Build HIL test firmware
         run: |
-          pio run -e hil_test
+          py -3.10 -m platformio run -e hil_test
 
       - name: Flash HIL test firmware
         run: |
