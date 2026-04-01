@@ -98,10 +98,7 @@ void startHilTestMode() {
         }
         else if (cmd == "TEST_WIFI") {
             Serial.println(WiFi.status() == WL_CONNECTED ? "[TEST] WIFI_OK" : "[TEST] WIFI_FAIL");
-        }
-        else if (cmd == "TEST_MQTT") {
-            Serial.println(mqttConnected() ? "[TEST] MQTT_OK" : "[TEST] MQTT_FAIL");
-        }
+        }       
         else {
             Serial.println("[TEST] UNKNOWN_CMD");
         }
