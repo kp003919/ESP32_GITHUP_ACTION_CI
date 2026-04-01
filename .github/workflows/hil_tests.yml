@@ -44,8 +44,11 @@ jobs:
           pio run -e hil_test -t upload
 
       - name: Start Mosquitto MQTT broker
+          shell: powershell
         run: |
-          "C:\Program Files\mosquitto\mosquitto.exe" -c "C:\Program Files\mosquitto\mosquitto_local.conf" -v
+           Start-Process -FilePath "C:\Program Files\mosquitto\mosquitto.exe" `
+             -ArgumentList '-c "C:\Program Files\mosquitto\mosquitto_local.conf" -v'
+
 
       - name: Wait for ESP32 reboot
         run: |
