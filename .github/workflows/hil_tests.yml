@@ -7,7 +7,7 @@ on:
     branches: [ "main" ]
 
 jobs:
-  hil_teststop:
+  hil_test:
     runs-on: self-hosted
 
     steps:
@@ -37,8 +37,7 @@ jobs:
 
       - name: Start Mosquitto MQTT broker
         run: |
-          cd "C:\Program Files\mosquitto"
-          start "" "mosquitto.exe" -c "mosquitto_local.conf" -v
+          "C:\Program Files\mosquitto\mosquitto.exe" -c "C:\Program Files\mosquitto\mosquitto_local.conf" -v
 
       - name: Wait for ESP32 reboot
         run: |
