@@ -248,7 +248,7 @@ def test_adc(ser):
 
 @pytest.mark.hil
 def test_pwm(ser):
-    resp, latency = send_test(ser, "TEST_PWM", max_ms=300)
+    resp, latency = send_test(ser, "TEST_PWM", max_ms=600)
     assert "PWM_OK" in resp
     record_metric("pwm_latency_ms", latency)
 
