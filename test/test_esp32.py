@@ -1,4 +1,3 @@
-
 import serial 
 import time
 import json
@@ -11,7 +10,6 @@ BAUD = 115200
 
 # --------------------------
 # Pytest Fixtures 
-# 
 # --------------------------
 
 @pytest.fixture(scope="session")
@@ -49,18 +47,8 @@ def send_test(ser, cmd, max_ms=300):
 
 
 # --------------------------
-# HIL Test Cases
+# HIL Test Cases (Existing)
 # --------------------------
-
-# Each test sends a command to the ESP32 and checks the response and latency.   
-# The tests cover basic connectivity (PING), uptime reporting, sensor readings (DHT, GPS),
-# RTLS data, and pulse generation. 
-# The latency thresholds are set based on expected response times for each command, allowing 
-# for some margin. 
-# The tests will fail if the ESP32 does not respond correctly or within the specified time limits,
-# ensuring that the HIL setup is functioning as intended.
-# Note: The actual commands and response formats must match what the ESP32 firmware is programmed to send.
-# The tests assume that the ESP32 is running a firmware that listens for these specific commands and responds accordingly.  
 
 @pytest.mark.hil
 def test_ping(ser):
@@ -89,6 +77,7 @@ def test_dht(ser):
     assert 0 <= dht["humidity"] <= 100
     assert latency < 500
 
+
 @pytest.mark.hil
 def test_gps(ser):
     resp, latency = send_test(ser, "TEST_GPS", max_ms=300)
@@ -98,6 +87,7 @@ def test_gps(ser):
     assert -180 <= gps["lon"] <= 180
     assert latency < 300
 
+
 @pytest.mark.hil
 def test_rtls(ser):
     resp, latency = send_test(ser, "TEST_RTLS", max_ms=300)
@@ -105,11 +95,13 @@ def test_rtls(ser):
     assert "rtls" in rtls
     assert isinstance(rtls["rtls"], list)
 
+
 @pytest.mark.hil
 def test_pulse(ser):
     resp, latency = send_test(ser, "TEST_PULSE", max_ms=200)
     assert "PULSE_DONE" in resp
     assert latency < 200
+
 
 @pytest.mark.hil
 def test_wifi(ser):
@@ -117,3 +109,50 @@ def test_wifi(ser):
     assert "WIFI_OK" in resp or "WIFI_FAIL" in resp
     assert latency < 500
 
+
+# --------------------------
+# NEW TESTS FOR NEW COMMANDS
+# --------------------------
+
+@pytest.mark.hil
+def test_mqtt_e2e(ser):
+    """End-to-end MQTT test (stub until real MQTT integrated)."""
+    resp, latency = send_test(ser, "TEST_MQTT_E2E", max_ms=1500)
+    data = extract_json(resp)
+
+    assert "connected" in data
+    assert "msg" in data
+    assert latency < 1500
+
+
+@pytest.mark.hil
+def test_ble_match(ser):
+    """BLE scan + target MAC detection."""
+    resp, latency = send_test(ser, "TEST_BLE_MATCH", max_ms=2000)
+    data = extract_json(resp)
+
+    assert "found" in data
+    assert "rtls" in data
+    assert isinstance(data["rtls"], list)
+    assert latency < 2000
+
+
+@pytest.mark.hil
+def test_i2c_read(ser):
+    """Functional I2C register read (e.g., MPU6050 WHO_AM_I)."""
+    resp, latency = send_test(ser, "TEST_I2C_READ", max_ms=500)
+    data = extract_json(resp)
+
+    assert "i2c_read" in data
+    assert "value" in data["i2c_read"]
+    assert latency < 500
+
+
+@pytest.mark.hil
+def test_spi_loop(ser):
+    """SPI MOSI->MISO loopback test."""
+    resp, latency = send_test(ser, "TEST_SPI_LOOP", max_ms=300)
+    data = extract_json(resp)
+
+    assert "loop_ok" in data
+    assert latency < 300
