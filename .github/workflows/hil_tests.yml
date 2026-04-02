@@ -11,15 +11,24 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      # ------------------------------------------------------------
+      # CLEAN WORKSPACE
+      # ------------------------------------------------------------
       - name: Clean workspace safely
         shell: powershell
         run: |
           Set-Location $env:GITHUB_WORKSPACE
           Get-ChildItem -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
+      # ------------------------------------------------------------
+      # CHECKOUT
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------
+      # PYTHON SETUP
+      # ------------------------------------------------------------
       - name: Install Python
         uses: actions/setup-python@v5
         with:
@@ -31,8 +40,11 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
-          pip install pytest pyserial junit-xml
+          pip install pytest pyserial junit-xml pytest-html
 
+      # ------------------------------------------------------------
+      # PLATFORMIO
+      # ------------------------------------------------------------
       - name: Install PlatformIO
         run: pip install platformio
 
@@ -42,6 +54,13 @@ jobs:
       - name: Flash HIL test firmware
         run: platformio run -e hil_test -t upload
 
+      # ------------------------------------------------------------
+      # EMBEDDED DEVELOPER DELAYS (IMPORTANT)
+      # ------------------------------------------------------------
+      - name: Allow ESP32 USB/Serial to re-enumerate
+        shell: powershell
+        run: Start-Sleep -Seconds 5
+
       - name: Start Mosquitto MQTT broker
         shell: powershell
         run: |
@@ -49,26 +68,45 @@ jobs:
             -ArgumentList '-c "C:\Program Files\mosquitto\mosquitto_local.conf" -v'
           Start-Sleep -Seconds 3
 
-      - name: Wait for ESP32 reboot
+      - name: Wait for ESP32 reboot + serial settle
         shell: powershell
         run: Start-Sleep -Seconds 25
 
-      - name: Run HIL tests and generate report
+      # ------------------------------------------------------------
+      # RUN TESTS (HTML + XML REPORTS)
+      # ------------------------------------------------------------
+      - name: Run HIL tests and generate reports
         run: |
-          pytest -v --junitxml=hil_report.xml
+          pytest -v `
+            --junitxml=hil_report.xml `
+            --html=hil_report.html `
+            --self-contained-html
 
-      - name: Upload HIL Test Report
+      # ------------------------------------------------------------
+      # ARTIFACTS
+      # ------------------------------------------------------------
+      - name: Upload JUnit XML Report
         uses: actions/upload-artifact@v4
         with:
-          name: hil-test-report
+          name: hil-xml-report
           path: hil_report.xml
 
+      - name: Upload HTML Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: hil-html-report
+          path: hil_report.html
+
+      # ------------------------------------------------------------
+      # SUMMARY
+      # ------------------------------------------------------------
       - name: Add summary to GitHub Actions UI
         shell: powershell
         run: |
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## ESP32 HIL Test Summary"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Firmware:** hil_test"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Report:** hil_report.xml (attached as artifact)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**HTML Report:** Download from the 'hil-html-report' artifact"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**JUnit XML:** Download from the 'hil-xml-report' artifact"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "All tests executed. Download the artifact for full details."
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "All HIL tests executed successfully. Reports are attached as artifacts."
