@@ -85,11 +85,7 @@ WiFiMQTT comms;
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    Serial.println("\nBooting...");
-    #ifdef HIL_TEST_MODE
-    startHilTestMode();
-    return;   // never run production code
-    #endif
+    Serial.println("\nBooting...");   
     
     // Start sensors
     Sensors_begin();
