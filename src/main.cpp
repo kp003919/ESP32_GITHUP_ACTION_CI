@@ -1,22 +1,18 @@
-/**
- * Cure IoT Project — FINAL VERSION (Node‑RED Only)
- * @Detials: This code is the main entry point for an ESP32-based IoT project that 
- * collects telemetry data from various sensors (DHT, GPS, RTLS) and sends it to a 
- * backend via MQTT. The code is structured to run on the ESP32 microcontroller and
- *  uses the Arduino framework. It includes setup and loop functions, as well as 
- * integration with a custom WiFiMQTT class for handling MQTT communication. 
- * The code also includes a watchdog timer to ensure the device remains responsive.
- *  The implementation is designed for use in an IoT project where the ESP32 collects
- *  sensor data and allows remote control via MQTT messages.  
+
+/** 
+ * Cure IoT Project - ESP32 Firmware    
+ * This firmware is designed for an ESP32-based IoT device that collects data from various sensors (DHT22, GPS, RTLS) and communicates with a Node-RED instance running on a Raspberry Pi using MQTT. The device can also receive commands from MQTT to control actuators such as fans and heaters. The code is structured into separate modules for sensors, communication, and real-time location tracking (RTLS), allowing for modular development and maintenance. The main loop handles telemetry collection and transmission at specified intervals, while the command callback processes incoming MQTT messages to control the device's actuators.   
+ * Author: Muhsin Atto
+ * Date: 2024-06-01 
+ * License: MIT License 
+ * For more information on ESP32 development, sensor integration, and MQTT communication, refer to the
+ *  ESP-IDF documentation, Arduino library documentation for the respective sensors, and the PubSubClient library documentation for MQTT communication.    
+ * Details:     
+ *  - Uses the Arduino framework for ESP32 development with C++14 standard
+ *  - Integrates DHT22 for temperature and humidity, a GPS module for location data                 and time, and a custom RTLS implementation for tracking nearby BLE devices
+ *  - Communicates with a Node-RED instance using MQTT for both telemetry and command handling               
+ *              
  * 
- * Note: This implementation assumes a local MQTT broker (e.g., Node-RED) 
- * is running at the specified IP address and port. The MQTT topics and message 
- * formats can be customized as needed for the specific application. The code also 
- * includes basic error handling and logging for debugging purposes.    
- *      
- * 
- * ESP32 Telemetry + Fan Command Handling
- * Device ID: anchor_01
  */
 
 #include <Arduino.h>
@@ -32,166 +28,145 @@
 
 // Protocols (SPI,UART,I2C)
 #include <SPI.h>
-#include "spi_driver.h" 
+#include "spi_driver.h"
 #include "uart_driver.h"
 #include "I2C_Driver.h"
 
-// Comms layer (Node‑RED only)
+// Comms    
 #include "comms/WiFiMQTT.h"
 
-// Timers
+// Actuator pins    
+#define FAN_PIN  8     //   fan ON/OFF
+#define HEATER_PIN 18  // heater ON/OFF
+
+// Timing variables for telemetry intervals 
 unsigned long lastDHT  = 0;
 unsigned long lastGPS  = 0;
 unsigned long lastRTLS = 0;
-unsigned long lastI2C = 0;
-unsigned long lastSPI = 0;
+unsigned long lastI2C  = 0;
+unsigned long lastSPI  = 0;
 unsigned long lastUART = 0;
 
-// Telemetry intervals (in milliseconds)
-// Adjust these intervals as needed for your application
-// For example, DHT readings every 5 seconds, GPS every 10 seconds, 
-// RTLS every 3 seconds, and I2C every 2 seconds.
-// Note: Be mindful of the total data volume and network usage when setting these intervals.
+// Telemetry intervals (in milliseconds)    
 const unsigned long DHT_INTERVAL  = 5000;
 const unsigned long GPS_INTERVAL  = 9000;
 const unsigned long RTLS_INTERVAL = 3000;
-const unsigned long I2C_INTERVAL = 2000; // 2 seconds
-const unsigned long SPI_INTERVAL = 4000; // 4 seconds
-const unsigned long UART_INTERVAL = 4000; // 4 seconds  
+const unsigned long I2C_INTERVAL  = 2000;
+const unsigned long SPI_INTERVAL  = 4000;
+const unsigned long UART_INTERVAL = 4000;
 
 // Global comms object
-// This object will handle all MQTT communication with the backend.
-//  It is initialized in the setup() function and used in the loop() 
-// function to maintain the connection and send telemetry data. The WiFiMQTT 
-//class abstracts away the details of connecting to the MQTT broker, subscribing 
-// to topics, and publishing messages, allowing the main code to focus on sensor data 
-// collection and processing. 
-
 WiFiMQTT comms;
 
-/**
- * setup() is the initialization function that runs once when the ESP32 boots up. 
- * It sets up the serial communication for debugging, initializes the sensors (DHT, GPS, RTLS), 
- * starts the I2C communication for RTLS, and configures the watchdog timer to ensure the device 
- * remains responsive. 
- * The function also initializes the MQTT communication by calling comms.begin(), which sets
- *  up the connection to the MQTT broker. 
- * Finally, it configures the actuator pins (e.g., fan control) 
- * and sets their initial state. This setup ensures that all components are ready before 
- * entering the main loop where telemetry data will be collected and sent to the backend.
- * @returns void
- */     
-
+/** 
+ * Setup function
+ * Initializes all components and starts the system
+*/
 void setup() {
+    // Initialize serial communication for debugging    
     Serial.begin(115200);
     delay(1000);
-    Serial.println("\nBooting...");   
-    
-    // Start sensors
-    Sensors_begin();
-    GPS_begin(); // enable when GPS is ready
-    RTLS_begin();
-    
-    // Start I2C (for RTLS)
-    i2c_begin();
-    // Start SPI (if needed for other peripherals)  
-    SPI_Init(); 
-    // Start UART (if needed for other peripherals)
-    UART2_Init(); 
-    Serial.println("ESP32 ready to receive STM32 data");
+    Serial.println("\nBooting...");
 
-    // Watchdog
-    // Initialize the watchdog timer with a timeout of 10 seconds and enable panic mode.
-    // This means that if the watchdog is not reset within 10 seconds, the ESP32 will automatically reset itself to recover from potential hangs or crashes.
-    // The esp_task_wdt_add(NULL) function adds the current task (the main loop) to the watchdog, ensuring that it is monitored for responsiveness. 
-    // In the loop() function, we will call esp_task_wdt_reset() to reset the watchdog timer regularly, indicating that the device is still functioning properly. If the loop fails to reset the watchdog within the specified timeout, the ESP32 will reboot, which can help maintain stability in an IoT application. 
-    // Note: Be cautious when using the watchdog timer, as it can cause unintended resets if the loop takes too long to execute or if there are blocking operations. Always ensure that the loop is designed to run efficiently and that any long-running tasks are handled appropriately (e.g., using non-blocking code or separate tasks).    
+    // Initialize sensors, GPS, and RTLS    
+    Sensors_begin();
+    GPS_begin();
+    RTLS_begin();
+
+    // Initialize watchdog timer to reset the system if it becomes unresponsive.
+    //  The timeout is set to 10 seconds, and the system will reset if the watchdog
+    //  is not reset within this period. This helps to ensure that the device can recover 
+    // from potential issues such as infinite loops or deadlocks. The watchdog should be 
+    // reset regularly in the main loop to prevent unintended resets during normal operation. 
 
     esp_task_wdt_init(10, true);
     esp_task_wdt_add(NULL);
 
-    // Node‑RED only
+    // Initialize communication (WiFi and MQTT) 
     comms.begin();
 
-    // Fan pin
+    // Set up actuator pins and ensure they are in a known state (OFF) at startup       
     pinMode(FAN_PIN, OUTPUT);
     digitalWrite(FAN_PIN, LOW);
+     
+    // TURN OFF FAN AND HEATER 
+    pinMode(FAN_PIN, OUTPUT);
+    pinMode(HEATER_PIN, OUTPUT);
+    digitalWrite(FAN_PIN, LOW);
+    digitalWrite(HEATER_PIN, LOW);
+
+/**
+ * MQTT Command Callback
+ * This callback function is registered with the MQTT client to handle incoming messages on subscribed topics. It parses the incoming MQTT message, extracts the key and value, and then forwards them to the main application through the commandCallback function pointer. The expected format of the incoming MQTT message is "key=value". The function checks for this format, and if valid, it splits the message into key and value components, trims any whitespace, and then calls the commandCallback with the parsed key and value. If the format is invalid, it logs an error message to the console. Note: The commandCallback should be set by the main application using the setCommandCallback method of the WiFiMQTT class for this mechanism to work. If no callback is set, incoming commands will be ignored after parsing. This function is registered with the MQTT client using mqtt.setCallback(mqttCallback) in the begin() method, ensuring that it will be called for any incoming messages on subscribed topics. 
+ *  
+ */ 
+comms.setCommandCallback([](const String& key, const String& value)
+{
+    Serial.println("[CMD] Key   = " + key);
+    Serial.println("[CMD] Value = " + value);
+
+    // Validate value
+    if (value != "on" && value != "off") {
+        Serial.println("[CMD] ERROR: Unknown command value");
+        return;
+    }
+
+    // Switch-like structure using if-else (strings cannot be used in switch)
+    if (key == "fan")
+    {
+        if (value == "on") {
+            digitalWrite(FAN_PIN, HIGH);            
+            Serial.println("[FAN] ON");
+        }
+        else { // value == "off"
+            digitalWrite(FAN_PIN, LOW);            
+            Serial.println("[FAN] OFF");
+        }
+    }
+    else if (key == "heater")
+    {
+        if (value == "on") {
+            Serial.println("[HEATER] ON");
+            digitalWrite(HEATER_PIN, HIGH);  // if you add heater pin later
+        }
+        else { // value == "off"
+            Serial.println("[HEATER] OFF");
+            digitalWrite(HEATER_PIN, LOW);
+        }
+    }
+    else
+    {
+        Serial.println("[CMD] ERROR: Unknown key");
+    }
+});
 }
 
+/** 
+ * Main loop function
+ * Handles telemetry collection and transmission at specified intervals, and resets the watchdog timer to prevent system resets. It collects data from the DHT22 sensor, GPS module, and RTLS system at their respective intervals and sends the telemetry data to the MQTT broker. The loop also includes a small delay to prevent it from running too fast, which can help with power consumption and allow other tasks to run smoothly. The watchdog timer is reset at the beginning of each loop iteration to ensure that the system does not reset due to inactivity. 
+*/
 void loop() {
-    comms.loop();  // keep MQTT alive
+    // Handle MQTT communication and reset watchdog timer to prevent system reset due to inactivity. This ensures that the device remains responsive and can recover from potential issues such as infinite loops or deadlocks. The MQTT loop function processes incoming messages and maintains the connection to the MQTT broker, while the watchdog reset ensures that the system can recover if it becomes unresponsive for any reason. This combination allows for robust operation of the IoT device while maintaining communication with the
+    MQTT broker and ensuring system stability.  
+    comms.loop();
     esp_task_wdt_reset();
+    // Update sensors and send telemetry at specified intervals     
     GPS_update();
 
-    // ---------------- UART2 (STM32 → ESP32) ----------------
-    UART2_Task();
-    const char* data = UART2_GetPacket();
-
-    if (data) {       
-        if (strcmp(data, "PING") == 0) {
-            Serial.println("[TEST] PONG");
-        } 
-        // Add more command handling as needed  
-        // comment to be seen in ci 
-        // For example, you could add commands to trigger specific actions on the ESP32 based on the data received from the STM32, such as controlling actuators, changing sensor reading intervals, or sending specific telemetry data back to the STM32.  
-        
-    }
-
-    // ---------------- USB Serial Test Interface (Python) ----------------
-    if (Serial.available()) {
-        String cmd = Serial.readStringUntil('\n');
-        cmd.trim();
-
-        if (cmd == "PING") {
-            Serial.println("[TEST] PONG");
-        }
-        else if (cmd == "TEST_UPTIME") {
-            Serial.print("[TEST] UPTIME ");
-            Serial.println(millis());
-        }
-        else if (cmd == "TEST_DHT") {
-            StaticJsonDocument<128> doc;
-            Sensors_read(doc);
-            Serial.print("[TEST] DHT ");
-            serializeJson(doc, Serial);
-            Serial.println();
-        }
-        else if (cmd == "TEST_GPS") {
-            StaticJsonDocument<128> doc;
-            GPS_fill(doc);
-            Serial.print("[TEST] GPS ");
-            serializeJson(doc, Serial);
-            Serial.println();
-        }
-        else if (cmd == "TEST_RTLS") {
-            StaticJsonDocument<128> doc;
-            RTLS_fill(doc);
-            Serial.print("[TEST] RTLS ");
-            serializeJson(doc, Serial);
-            Serial.println();
-        }
-        else if (cmd == "TEST_PULSE") {
-            digitalWrite(FAN_PIN, HIGH);
-            delayMicroseconds(100);
-            digitalWrite(FAN_PIN, LOW);
-            Serial.println("[TEST] PULSE_DONE");
-        } 
-        else if (cmd == "TEST_NET") 
-        { 
-            bool wifi_ok = true;  // add function to return actual WiFi status if needed (e.g., WiFi.status() == WL_CONNECTED)  
-            bool mqtt_ok = true; // You must add this method if not present 
-            Serial.print("[TEST] NET "); 
-            Serial.print(wifi_ok ? "WIFI_OK " : "WIFI_FAIL "); 
-            Serial.println(mqtt_ok ? "MQTT_OK" : "MQTT_FAIL"); 
-        }
-    }
-
-    // ---------------- Telemetry Tasks ----------------
+    // Get the current time in milliseconds since the device started. This is used to determine when to collect and send telemetry data based on the defined intervals for each sensor. By comparing the current time with the last recorded time for each sensor, the loop can decide when to read new data and send it to the MQTT broker. This approach allows for efficient scheduling of sensor readings and data transmission without blocking the main loop, ensuring that the device remains responsive to incoming MQTT messages and other tasks.  
+    // Get current time for interval checks 
     unsigned long now = millis();
-
+     
+    // Check if it's time to read from the DHT22 sensor and send telemetry data. 
+    // If the current time minus the last recorded time for the DHT22 sensor exceeds
+    //  the defined interval (DHT_INTERVAL), it creates a new JSON document, populates
+    //  it with the sensor data, and sends it to the MQTT broker. After sending the telemetry,
+    //  it updates the last recorded time for the DHT22 sensor to the current time. 
+    // This ensures that the DHT22 sensor data is collected and transmitted at regular 
+    // intervals without blocking the main loop. The same logic is applied for GPS and RTLS 
+    // data collection and transmission  in their respective intervals.   
     if (now - lastDHT > DHT_INTERVAL) {
         StaticJsonDocument<256> doc;
-
         doc["type"] = "dht";
         doc["id"]   = DEVICE_ID;
         doc["ts"]   = now;
@@ -219,8 +194,9 @@ void loop() {
         RTLS_fill(doc);
         comms.sendTelemetry(doc);
         lastRTLS = now;
-        
     }
-
+   
+    // Small delay to prevent the loop from running too fast, which can help with power consumption and allow other tasks to run smoothly. This also gives time for the MQTT loop to process incoming messages and maintain the connection to the MQTT broker without overwhelming the system. The delay can be adjusted based on the specific requirements of the application and the desired responsiveness of the device. In this case, a 5 millisecond delay is used as a balance between responsiveness and allowing other tasks to execute effectively.   
+    
     delay(5);
 }

@@ -1,28 +1,56 @@
+
+/**
+ * RTLS.cpp - Real-Time Location System (RTLS) implementation for ESP32     
+ * This file implements a simple RTLS system using BLE scanning on the ESP32. It defines a BeaconInfo structure to store information about detected beacons, including a unique ID, smoothed RSSI value, battery level, type, and last seen timestamp. The system uses a BLE callback to process advertised devices, extract relevant information from their manufacturer data, and maintain a list of active beacons with RSSI smoothing and expiration logic. The implementation supports both custom beacons with specific manufacturer data formats and generic devices by generating synthetic IDs based on their MAC addresses. The SHOW_ALL_BEACONS flag allows for filtering of valid beacons or displaying all detected devices.   
+ * Note: This implementation is a starting point for an RTLS system and can be expanded with additional features such as distance estimation, trilateration, or integration with other sensors for improved accuracy. The current implementation focuses on BLE scanning and basic beacon management on the ESP32 platform. 
+ * Author: Muhsin Atto
+ * Date: 2026-04-01 
+ * License: MIT License 
+ * For more information on BLE scanning and ESP32 development, refer to the ESP-IDF documentation and the Arduino BLE library documentation.    
+ * Details:
+ * - Uses the Arduino BLE library to perform BLE scanning and process advertised devices.   
+ *  - The BeaconInfo structure includes fields for a unique ID, smoothed RSSI value, battery level, type, last seen timestamp, and a flag to indicate if an RSSI value has been set.
+ * - The RTLSCallback class implements the BLEAdvertisedDeviceCallbacks interface to handle detected BLE    
+ * advertised devices. It extracts manufacturer data, parses it according to known formats (custom ESP32/Raspberry Pi beacons, iBeacon, Eddystone), and updates the list of beacons with RSSI smoothing and expiration logic.
+ * - The hashMac function generates a 32-bit hash from a MAC address string using the
+ *  djb2 algorithm, which is used to create synthetic IDs for devices that do not have valid manufacturer data when SHOW_ALL_BEACONS is enabled.
+ * - The parseManufacturer function checks the manufacturer data of a BLE device against known formats and extracts
+ *  the ID, battery level, and type. If the data does not match known formats, it generates a synthetic ID based on the MAC address if SHOW_ALL_BEACONS is enabled.
+ * - The updateRSSI function implements an exponential moving average to smooth the RSSI values for each beacon, providing a more stable signal strength measurement over time.
+ * - The system maintains a list of up to 20 beacons, updating their information when           detected and removing them if they have not been seen for a specified timeout period (2 minutes).
+ * - The implementation assumes that the BLE scanning is started elsewhere in the code (e.g., in the setup function) and that the RTLSCallback is registered with the BLE scan object to receive callbacks for detected devices.
+ * - The SHOW_ALL_BEACONS flag can be toggled to control whether only valid beacons with recognized manufacturer data are displayed, or if all detected devices are included in the list with synthetic IDs. This allows for flexibility in how the RTLS system handles and displays detected BLE devices based on the application's requirements.  
+ *      
+ */
+
 #include "RTLS.h"
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
+
+
+#define BEACON_LIST_SIZE 20  // Maximum number of beacons to track  
 
 // =========================
 // Mode Flag (React Controls This)
 // =========================
 bool SHOW_ALL_BEACONS = false;   // false = only valid beacons, true = all devices
 
+
 // =========================
 // Beacon Structure
 // =========================
 struct BeaconInfo {
     uint32_t id;            // 32-bit unique ID
-    float rssiSmoothed;
-    uint8_t battery;
-    uint8_t type;
-    uint32_t lastSeen;
-    bool hasRssi = false;
+    float rssiSmoothed;     // Smoothed RSSI value
+    uint8_t battery;       // Battery level (0-100)   
+    uint8_t type;         // Beacon type (0 = unknown, 1 = iBeacon, 2 = Eddystone, etc.)   
+    uint32_t lastSeen;    // Timestamp of last detection (millis())       
+    bool hasRssi = false; // Flag to indicate if RSSI has been set at least once    
 };
 
-// Storage
-static BeaconInfo beacons[20];
-static uint8_t beaconCount = 0;
+static BeaconInfo beacons[BEACON_LIST_SIZE];  // Array to store beacon information    
+static uint8_t beaconCount = 0; // Current number of beacons in the list    
 
 // BLE Scan object
 static BLEScan* pBLEScan = nullptr;
@@ -33,11 +61,13 @@ static const float EMA_ALPHA = 0.30f;
 // Expire beacons after 2 minutes
 static const uint32_t BEACON_TIMEOUT = 120000; // 2 minutes
 
-
-
-// =========================
-// Utility: Update RSSI
-// =========================
+/**
+ * Update RSSI with Exponential Moving Average      
+ * This function updates the smoothed RSSI value for a beacon using an exponential moving average (EMA). If the beacon does not have a valid RSSI value yet (hasRssi is false), it initializes the smoothed RSSI with the new value. If it already has a valid RSSI, it applies the EMA formula to update the smoothed RSSI. This helps to stabilize the RSSI readings over time, reducing the impact of sudden fluctuations in signal strength. The EMA_ALPHA constant controls the smoothing factor, with higher values giving more weight to recent readings and lower values providing more smoothing over time.        
+ * @param b Reference to the BeaconInfo structure to be updated
+ * @param newRssi The new RSSI value to be incorporated into the smoothed RSS
+ *  
+ */
 void updateRSSI(BeaconInfo& b, int newRssi) {
     if (!b.hasRssi) {
         b.rssiSmoothed = newRssi;
@@ -115,9 +145,13 @@ bool parseManufacturer(BLEAdvertisedDevice& device,
     return true;
 }
 
-// =========================
-// BLE Callback
-// =========================
+/**
+ * BLE Advertised Device Callback
+ * This class implements the BLEAdvertisedDeviceCallbacks interface to handle detected BLE advertised devices during scanning           
+ *  The onResult method is called for each detected device and processes the manufacturer data to extract relevant information such as a unique ID, battery level, and type. It updates the list of beacons with RSSI smoothing and expiration logic, allowing for a stable and up-to-date representation of nearby BLE devices. The callback supports both custom beacons with specific manufacturer data formats and generic devices by generating synthetic IDs based on their MAC addresses when SHOW_ALL_BEACONS is enabled. This implementation provides a flexible way to manage detected BLE devices in an RTLS system on the ESP32 platform.    
+ * Note: The BLE scan object must be configured to use this callback for it to function correctly       
+ *      
+ */
 class RTLSCallback : public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice device) override {
 
@@ -170,9 +204,13 @@ class RTLSCallback : public BLEAdvertisedDeviceCallbacks {
     }
 };
 
-// =========================
-// RTLS Initialization
-// =========================
+/**
+ * RTLS Initialization
+ * This function initializes the BLE scanning functionality for the RTLS system. It sets up the BLE             
+ * device, configures the scan parameters, and registers the RTLSCallback to handle detected BLE advertised devices. The scan is configured for active scanning with specific interval and window settings to optimize detection of nearby BLE devices. This initialization function should be called in the setup phase of the main program to prepare the RTLS system for operation.    
+ * Note: The BLE library must be included and properly configured in the project for this function to   work correctly. Additionally, the RTLSCallback class must be defined and implemented to handle the processing of detected devices during scanning.      
+ * 
+ */
 void RTLS_begin() {
     BLEDevice::init("");
     pBLEScan = BLEDevice::getScan();
@@ -182,9 +220,13 @@ void RTLS_begin() {
     pBLEScan->setWindow(79);
 }
 
-// =========================
-// RTLS Update
-// =========================
+/**
+ * RTLS Update Loop
+ * This function should be called regularly in the main loop to maintain the BLE scanning and manage the list of detected beacons. It checks if the BLE scan object is initialized and starts a new scan every 2 seconds. Additionally, it iterates through the list of detected beacons and removes any that have not been seen for a specified timeout period (2 minutes). This ensures that the list of beacons remains up-to-date and does not contain stale entries. The function relies on the RTLSCallback to handle the processing of detected devices during scanning and update the beacon information accordingly.    
+ * Note: The BLE scanning must be properly initialized using RTLS_begin() before calling this update function. The RTLSCallback class must also be implemented to handle device detection and beacon management effectively.      
+ * 
+ */ 
+
 void RTLS_update() {
     static uint32_t lastScan = 0;
     if (!pBLEScan) return;
@@ -205,10 +247,12 @@ void RTLS_update() {
         }
     }
 }
+/**
+ * RTLS Fill JSON
+ * This function fills a JSON document with the list of detected beacons and their information. It creates a nested array of beacons and populates each beacon object with its ID, RSSI, battery level, type, and last seen timestamp. This function is typically called to prepare the data for transmission or display in a web interface or API response.
+ * Note: The JSON document must be properly initialized before calling this function.
+ */
 
-// =========================
-// Fill JSON
-// =========================
 void RTLS_fill(JsonDocument& doc) {
     JsonArray arr = doc.createNestedArray("beacons");
     for (uint8_t i = 0; i < beaconCount; i++) {
@@ -221,9 +265,12 @@ void RTLS_fill(JsonDocument& doc) {
     }
 }
 
-// =========================
-// Mode Setter (React Controls This)
-// =========================
+/**
+ * RTLS Set Mode
+ * This function sets the mode of the RTLS system based on the provided string. It updates the SHOW_ALL_BEACONS flag to control whether only valid beacons with recognized manufacturer data are displayed, or if all detected devices are included in the list with synthetic IDs. The mode can be set to "all" to show all devices or "valid" to show only valid beacons. This function allows for dynamic control of the beacon filtering behavior based on user input or application requirements.    
+ * Note: The function expects a valid mode string ("all" or "valid") and does not perform error handling for invalid input. It should be called before starting the BLE scanning to ensure that the desired mode is applied correctly.      
+ * 
+ */
 void RTLS_setMode(const char* mode) {
     if (strcmp(mode, "all") == 0) {
         SHOW_ALL_BEACONS = true;
