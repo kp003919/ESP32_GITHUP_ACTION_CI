@@ -19,7 +19,7 @@
 // Default MQTT broker settings (can be overridden in config.h)
 // -----------------------------------------------------------------------------
 #ifndef MQTT_BROKER
-#define MQTT_BROKER "192.168.0.92"
+#define MQTT_BROKER "192.168.0.21"
 #endif
 
 #ifndef MQTT_PORT
