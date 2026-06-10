@@ -11,7 +11,7 @@
 #define DEVICE_ID "ANCHOR_01"
 
 // MQTT broker
-#define MQTT_SERVER "192.168.0.21"
+#define MQTT_BROKER "192.168.0.21"
 #define MQTT_PORT   1883
 
 // DHT config

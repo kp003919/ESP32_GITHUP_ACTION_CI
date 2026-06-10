@@ -49,8 +49,8 @@ unsigned long lastUART = 0;
 
 // Telemetry intervals (in milliseconds)    
 const unsigned long DHT_INTERVAL  = 5000;
-const unsigned long GPS_INTERVAL  = 9000;
-const unsigned long RTLS_INTERVAL = 3000;
+const unsigned long GPS_INTERVAL  = 5000;
+const unsigned long RTLS_INTERVAL = 5000;
 const unsigned long I2C_INTERVAL  = 2000;
 const unsigned long SPI_INTERVAL  = 4000;
 const unsigned long UART_INTERVAL = 4000;
@@ -147,7 +147,7 @@ comms.setCommandCallback([](const String& key, const String& value)
 */
 void loop() {
     // Handle MQTT communication and reset watchdog timer to prevent system reset due to inactivity. This ensures that the device remains responsive and can recover from potential issues such as infinite loops or deadlocks. The MQTT loop function processes incoming messages and maintains the connection to the MQTT broker, while the watchdog reset ensures that the system can recover if it becomes unresponsive for any reason. This combination allows for robust operation of the IoT device while maintaining communication with the
-    MQTT broker and ensuring system stability.  
+    // MQTT broker and ensuring system stability.  
     comms.loop();
     esp_task_wdt_reset();
     // Update sensors and send telemetry at specified intervals     
@@ -167,6 +167,7 @@ void loop() {
     // data collection and transmission  in their respective intervals.   
     if (now - lastDHT > DHT_INTERVAL) {
         StaticJsonDocument<256> doc;
+        Serial.println("[DHT] Reading sensor data...");
         doc["type"] = "dht";
         doc["id"]   = DEVICE_ID;
         doc["ts"]   = now;
@@ -176,6 +177,7 @@ void loop() {
     }
 
     if (now - lastGPS > GPS_INTERVAL) {
+        Serial.println("[GPS] Reading sensor data...");
         StaticJsonDocument<256> doc;
         doc["type"] = "gps";
         doc["id"]   = DEVICE_ID;
@@ -186,6 +188,7 @@ void loop() {
     }
 
     if (now - lastRTLS > RTLS_INTERVAL) {
+        Serial.println("[RTLS] Reading sensor data...");
         RTLS_update();
         StaticJsonDocument<256> doc;
         doc["type"] = "rtls";

@@ -26,7 +26,7 @@ pipeline {
                 '''
             }
         }
-
+# The above stage checks if a Python virtual environment already exists. If it doesn't, it creates one and installs the necessary dependencies (PlatformIO and pytest) within that environment. This ensures that the build and test processes use a consistent set of tools and libraries, avoiding conflicts with any system-wide installations.  
         stage('Build HIL Firmware') {
             steps {
                 sh '''

@@ -1,122 +1,84 @@
 /*
- * WiFiMQTT.cpp - WiFi and MQTT communication for ESP32
- * This module handles connecting to WiFi, connecting to an MQTT broker (Node-RED), subscribing to command topics, and publishing telemetry data.
- * It uses the PubSubClient library for MQTT communication and the ArduinoJson library for JSON handling.
- * The module is designed to be used in an ESP32-based IoT project where the device needs to communicate with a Node-RED instance running on a Raspberry Pi.
- * 
- * Key features:
- * - Connects to WiFi using credentials defined in secrets_new.h
- * - Connects to an MQTT broker (Node-RED) at a specified IP and port
- * - Subscribes to command topics for controlling fans, heaters, and WiFi settings
- * - Publishes telemetry data as JSON documents to a specified topic
- * - Provides a callback mechanism for handling incoming commands in the main application
- * 
- */ 
+ * WiFiMQTT.cpp - WiFi + MQTT communication for ESP32
+ * ---------------------------------------------------
+ * This module provides:
+ *   - WiFi auto‑reconnect
+ *   - MQTT reconnect with exponential backoff
+ *   - Optional TLS (WiFiClientSecure)
+ *   - JSON command parsing (with fallback to key=value)
+ *   - Optional FreeRTOS task for MQTT loop
+ *
+ * It is designed to be robust for real IoT deployments.
+ */
+
 #include "WiFiMQTT.h"
 #include "../config.h"
 #include "../secrets_new.h"
 
-#include <WiFi.h>
-#include <WiFiClient.h>
-#include <PubSubClient.h>
+// -----------------------------------------------------------------------------
+// Default MQTT broker settings (can be overridden in config.h)
+// -----------------------------------------------------------------------------
+#ifndef MQTT_BROKER
+#define MQTT_BROKER "192.168.0.92"
+#endif
 
-// ------------------------------------------------------
-// NODE-RED ONLY
-// ------------------------------------------------------
-static WiFiClient plainClient; // We use a single WiFiClient for MQTT. If we wanted to support multiple backends, we would need to manage multiple clients and connections. 
+#ifndef MQTT_PORT
+#define MQTT_PORT 1883
+#endif
 
-static PubSubClient mqtt(plainClient); // MQTT client using the plain WiFiClient. This is sufficient for connecting to a local Node-RED instance without TLS. If we wanted to support secure connections, we would need to use WiFiClientSecure and manage certificates.    
+#ifndef USE_MQTT_TLS
+#define USE_MQTT_TLS 0
+#endif
 
+// Global backend selection
+BackendType backend = BACKEND_NODE_RED;
 
-// MQTT broker (Node-RED / Mosquitto on Pi or PC )
-static const char* NR_BROKER = "192.168.0.92"; // 
-static const int   NR_PORT   = 1883;
+// -----------------------------------------------------------------------------
+// MQTT topics
+// -----------------------------------------------------------------------------
+static const char* TOPIC_TELEMETRY   = "esp32/telemetry";
+static const char* TOPIC_FAN_CMD     = "esp32/fan/cmd";
+static const char* TOPIC_HEATER_CMD  = "esp32/heater/cmd";
+static const char* TOPIC_WIFI_CMD    = "esp32/anchor_01/wifi/cmd";
 
-// MQTT topics  
-static const char* TOPIC_TELEMETRY = "esp32/telemetry";
-static const char* TOPIC_FAN_CMD   = "esp32/fan/cmd";
-static const char* TOPIC_HEATER_CMD   = "esp32/heater/cmd";
-static const char* TOPIC_WIFI_CMD  = "esp32/anchor_01/wifi/cmd";
-static const char* TOPIC_PROTOCOLS = "device/protocols";
+// Static instance pointer for static callback trampoline
+WiFiMQTT* WiFiMQTT::instance = nullptr;
 
-// Command callback function pointer    
-// This callback will be set by the main application to handle incoming commands from MQTT. It takes a key and value as parameters, which are parsed from the incoming MQTT messages. The main application can implement this callback to perform actions based on the received commands, such as controlling fans, heaters, or updating WiFi settings. 
-// The callback is defined as a std::function, allowing for flexible assignment of any callable object (e.g., lambda, function pointer, std::bind result) that matches the signature.   
-WiFiMQTT::CommandCallback commandCallback = nullptr;
-
-/**  
- * MQTT callback function
- * This function is called by the PubSubClient library when a message is received on a subscribed   topic. It parses the incoming message, extracts the key and value, and then forwards them to the main application through the commandCallback function pointer. 
- * The expected format of the incoming MQTT message is "key=value". The function checks for this format, and if valid, it splits the message into key and value components, trims any whitespace, and then calls the commandCallback with the parsed key and value. If the format is invalid, it logs an error message to the console. 
- * Note: The commandCallback should be set by the main application using the setCommandCallback method of the WiFiMQTT class for this mechanism to work. If no callback is set, incoming commands will be ignored after parsing.    
- * This function is registered with the MQTT client using mqtt.setCallback(mqttCallback) in the begin() method, ensuring that it will be called for any incoming messages on subscribed topics. 
- *  
- */
-void mqttCallback(char* topic, byte* payload, unsigned int length)
+// -----------------------------------------------------------------------------
+// Constructor
+// -----------------------------------------------------------------------------
+WiFiMQTT::WiFiMQTT()
+: _plainClient()
+, _secureClient()
+, _mqtt(_plainClient)        // default client (can switch to TLS later)
+, _commandCallback(nullptr)
+, _lastWifiCheck(0)
+, _lastMqttReconnect(0)
+, _mqttBackoffMs(3000)       // start with 3s reconnect delay
+, _taskHandle(nullptr)
 {
-    // Convert payload to string
-    String msg;
-    for (unsigned int i = 0; i < length; i++) {
-        msg += (char)payload[i];
-    }
+}
 
-    Serial.println("\n[MQTT] RAW message: " + msg);
-
-    // Parse key=value
-    int sep = msg.indexOf('=');
-    if (sep == -1) {
-        Serial.println("[MQTT] Invalid format. Expected key=value");
-        return;
-    }
-
-    String key   = msg.substring(0, sep);
-    String value = msg.substring(sep + 1);
-
-    key.trim();
-    value.trim();
-
-    // Forward to main.cpp
-    if (commandCallback) {
-        commandCallback(key,value);   
+// -----------------------------------------------------------------------------
+// Static MQTT callback → forwards to instance method
+// -----------------------------------------------------------------------------
+void WiFiMQTT::mqttCallbackStatic(char* topic, byte* payload, unsigned int length) {
+    if (instance) {
+        instance->handleMqttMessage(topic, payload, length);
     }
 }
 
+// -----------------------------------------------------------------------------
+// begin() — Connect to WiFi and configure MQTT
+// -----------------------------------------------------------------------------
+void WiFiMQTT::begin() {
+    instance = this;
 
-// ------------------------------------------------------
-// Command callback setter
-// ------------------------------------------------------
-void WiFiMQTT::setCommandCallback(CommandCallback cb) {
-    commandCallback = cb;
-}
-
-/**
- * Configure MQTT client
- * This function sets up the MQTT client with the appropriate server and callback function. It is called    during the initialization process in the begin() method to ensure that the MQTT client is ready to connect and handle incoming messages.    
- * The function sets the MQTT server to the specified broker IP and port, and registers the mqttCallback function to handle incoming messages. This setup is essential for enabling MQTT communication with the Node-RED instance and allowing the device to receive commands and publish telemetry data as needed.    
- * Note: If we wanted to support multiple backends or secure connections, we would need to modify this function to manage multiple clients and configure TLS settings accordingly. For the current use case of connecting to a local Node-RED instance without TLS, this configuration is sufficient.       
- *  
- */
-void WiFiMQTT::configureMQTT() {
-    mqtt.setClient(plainClient);
-    mqtt.setServer(NR_BROKER, NR_PORT);
-    Serial.println("[MQTT] Node-RED configured");
-}
-
-/**
- * Initialize WiFi and MQTT
- * This function initializes the WiFi connection and configures the MQTT client. 
- * It is called during the setup process to ensure that the device is connected to 
- * the network and ready to communicate via MQTT.   
- * The function first attempts to connect to the WiFi network using the credentials defined in secrets_new.h. It waits until a connection is established, printing status messages to the console. Once connected, it prints the assigned IP address and calls configureMQTT() to set up the MQTT client with the appropriate server and callback function. Finally, it registers the mqttCallback function to handle incoming MQTT messages. 
- * Note: The function   assumes that the WiFi credentials and MQTT broker information are correctly defined in the configuration files. If the WiFi connection fails, it will block indefinitely until a connection is established. For a more robust implementation, you might want to add timeout handling or retry logic for the WiFi connection.        
- *      
- *  
- */
-
- void WiFiMQTT::begin() {
     Serial.println("[WiFi] Connecting...");
+    WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+    // Block until WiFi connects
     while (WiFi.status() != WL_CONNECTED) {
         delay(300);
         Serial.print(".");
@@ -126,78 +88,233 @@ void WiFiMQTT::configureMQTT() {
     Serial.println(WiFi.localIP());
 
     configureMQTT();
-    mqtt.setCallback(mqttCallback);
 }
 
-/**
- * MQTT loop
- * This function should be called regularly in the main loop to maintain the MQTT connection and process incoming       
- *  messages. It checks if the MQTT client is connected, and if not, it attempts to reconnect. If the connection is successful, it subscribes to the relevant command topics. Finally, it calls mqtt.loop() to process any incoming messages and maintain the connection. 
- * Note: The function assumes that the MQTT client is properly configured and that the MQTT broker is               
- * available. If the connection to the MQTT broker fails, it will print the error state to the console and continue trying to reconnect on subsequent calls. For a more robust implementation, you might want to add additional error handling or backoff strategies for reconnection attempts.         
- * 
- */
+// -----------------------------------------------------------------------------
+// configureMQTT() — Select client (TLS or plain) and set callback
+// -----------------------------------------------------------------------------
+void WiFiMQTT::configureMQTT() {
+#if USE_MQTT_TLS
+    Serial.println("[MQTT] Using TLS");
+    _secureClient.setInsecure();   // or setCACert(MQTT_CA_CERT)
+    _mqtt.setClient(_secureClient);
+#else
+    Serial.println("[MQTT] Using plain TCP");
+    _mqtt.setClient(_plainClient);
+#endif
+
+    _mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+    _mqtt.setCallback(WiFiMQTT::mqttCallbackStatic);
+
+    Serial.printf("[MQTT] Broker: %s:%d\n", MQTT_BROKER, MQTT_PORT);
+}
+
+// -----------------------------------------------------------------------------
+// ensureWifi() — Auto‑reconnect WiFi every 5 seconds if disconnected
+// -----------------------------------------------------------------------------
+void WiFiMQTT::ensureWifi() {
+    unsigned long now = millis();
+    if (now - _lastWifiCheck < 5000) return;
+    _lastWifiCheck = now;
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[WiFi] Lost connection, reconnecting...");
+        WiFi.disconnect();
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// ensureMqtt() — Reconnect MQTT with exponential backoff
+// -----------------------------------------------------------------------------
+void WiFiMQTT::ensureMqtt() {
+    if (_mqtt.connected()) return;
+
+    unsigned long now = millis();
+    if (now - _lastMqttReconnect < _mqttBackoffMs) return;
+    _lastMqttReconnect = now;
+
+    Serial.println("[MQTT] Reconnecting...");
+
+    configureMQTT();
+
+    // Unique client ID
+    String clientId = "esp32-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+
+    bool ok = _mqtt.connect(clientId.c_str()
+#ifdef MQTT_USERNAME
+                            , MQTT_USERNAME, MQTT_PASSWORD
+#endif
+    );
+
+    if (ok) {
+        Serial.println("[MQTT] Connected.");
+
+        // Subscribe to command topics
+        _mqtt.subscribe(TOPIC_FAN_CMD);
+        _mqtt.subscribe(TOPIC_HEATER_CMD);
+        _mqtt.subscribe(TOPIC_WIFI_CMD);
+
+        // Reset backoff on success
+        _mqttBackoffMs = 3000;
+    } else {
+        Serial.printf("[MQTT] Failed. State=%d\n", _mqtt.state());
+
+        // Exponential backoff (max 60s)
+        _mqttBackoffMs = min<uint32_t>(_mqttBackoffMs * 2, 60000);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// loop() — Must be called frequently (or run inside FreeRTOS task)
+// -----------------------------------------------------------------------------
 void WiFiMQTT::loop() {
-    if (!mqtt.connected()) {
-        Serial.println("[MQTT] Reconnecting...");
+    ensureWifi();
+    ensureMqtt();
 
-        configureMQTT();
+    if (_mqtt.connected()) {
+        _mqtt.loop();
+    }
+}
 
-        String clientId = "esp32-" + String(random(0xFFFF), HEX);
-        bool ok = mqtt.connect(clientId.c_str());
+// -----------------------------------------------------------------------------
+// startTask() — Run MQTT loop inside a dedicated FreeRTOS task
+// -----------------------------------------------------------------------------
+void WiFiMQTT::startTask(UBaseType_t priority,
+                         uint32_t stackSize,
+                         BaseType_t core) {
+    if (_taskHandle) return;
 
-        if (ok) {
-            Serial.println("[MQTT] Connected.");
-            mqtt.subscribe(TOPIC_FAN_CMD);
-            mqtt.subscribe(TOPIC_WIFI_CMD);
-            mqtt.subscribe(TOPIC_HEATER_CMD);
-        } else {
-            Serial.print("[MQTT] Failed. State=");
-            Serial.println(mqtt.state());
-        }
+    xTaskCreatePinnedToCore(
+        WiFiMQTT::taskEntry,
+        "mqttTask",
+        stackSize,
+        this,
+        priority,
+        &_taskHandle,
+        core
+    );
+}
+
+void WiFiMQTT::taskEntry(void* pv) {
+    WiFiMQTT* self = static_cast<WiFiMQTT*>(pv);
+    for (;;) {
+        self->loop();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+// -----------------------------------------------------------------------------
+// setCommandCallback() — Register user callback
+// -----------------------------------------------------------------------------
+void WiFiMQTT::setCommandCallback(CommandCallback cb) {
+    _commandCallback = cb;
+}
+
+// -----------------------------------------------------------------------------
+// handleMqttMessage() — Parse JSON or key=value commands
+// -----------------------------------------------------------------------------
+void WiFiMQTT::handleMqttMessage(char* topic, byte* payload, unsigned int length) {
+    String t = String(topic);
+    String msg;
+    msg.reserve(length + 1);
+
+    for (unsigned int i = 0; i < length; ++i) {
+        msg += (char)payload[i];
     }
 
-    mqtt.loop();
+    Serial.printf("\n[MQTT] Topic: %s\n", t.c_str());
+    Serial.printf("[MQTT] Payload: %s\n", msg.c_str());
+
+    if (!_commandCallback) {
+        Serial.println("[MQTT] No command callback set.");
+        return;
+    }
+
+    // -------------------------
+    // 1) Try JSON format
+    // -------------------------
+    StaticJsonDocument<256> doc;
+    if (deserializeJson(doc, msg) == DeserializationError::Ok) {
+        String key, value;
+
+        // Format A: {"key":"fan","value":"on"}
+        if (doc.containsKey("key") && doc.containsKey("value")) {
+            key   = doc["key"].as<String>();
+            value = doc["value"].as<String>();
+        }
+        // Format B: {"fan":"on"}
+        else {
+            for (JsonPair kv : doc.as<JsonObject>()) {
+                key   = kv.key().c_str();
+                value = kv.value().as<String>();
+                break;
+            }
+        }
+
+        key.trim();
+        value.trim();
+
+        if (key.length() == 0) {
+            Serial.println("[MQTT] JSON has no usable key");
+            return;
+        }
+
+        _commandCallback(key, value);
+        return;
+    }
+
+    // -------------------------
+    // 2) Fallback: key=value
+    // -------------------------
+    int sep = msg.indexOf('=');
+    if (sep == -1) {
+        Serial.println("[MQTT] Invalid format. Expected JSON or key=value");
+        return;
+    }
+
+    String key   = msg.substring(0, sep);
+    String value = msg.substring(sep + 1);
+    key.trim();
+    value.trim();
+
+    _commandCallback(key, value);
 }
 
-/**
- * Send telemetry data
- * This function serializes the provided JSON document and publishes it to the telemetry topic.
- * It prints a message to the console indicating that telemetry data is being sent.
- * @param doc The JSON document containing the telemetry data to be sent.
- */
-
+// -----------------------------------------------------------------------------
+// sendTelemetry() — Publish JSON telemetry
+// -----------------------------------------------------------------------------
 void WiFiMQTT::sendTelemetry(const JsonDocument& doc) {
-    Serial.println("[TX] sendTelemetry()");
+    if (!_mqtt.connected()) {
+        Serial.println("[TX] MQTT not connected, dropping telemetry");
+        return;
+    }
 
     char buf[512];
-    size_t n = serializeJson(doc, buf, sizeof(buf));
-    if (n == 0) {
+    if (serializeJson(doc, buf, sizeof(buf)) == 0) {
         Serial.println("[TX] JSON too large");
         return;
     }
 
-    //Serial.print("[TX] Node-RED -> ");
-    //Serial.println(buf);
-
-    mqtt.publish(TOPIC_TELEMETRY, buf);
-    mqtt.publish("test", "to PI");
+    Serial.println("[TX] Telemetry -> esp32/telemetry");
+    _mqtt.publish(TOPIC_TELEMETRY, buf);
 }
 
-/**
- * Publish to a topic
- * This function serializes the provided JSON document and publishes it to the specified MQTT topic. 
- * It prints a message to the console indicating the topic and the raw message being sent. 
- * @param topic The MQTT topic to which the message should be published.
- * @param doc The JSON document containing the data to be published.
- */ 
-
+// -----------------------------------------------------------------------------
+// publish() — Generic JSON publish
+// -----------------------------------------------------------------------------
 void WiFiMQTT::publish(const char* topic, const JsonDocument& doc) {
+    if (!_mqtt.connected()) {
+        Serial.println("[TX] MQTT not connected, dropping publish");
+        return;
+    }
+
     char buf[512];
-    serializeJson(doc, buf, sizeof(buf));
-    //Serial.print("[TX] ");
-   // Serial.print(topic);
-   // Serial.print(" -> ");
-   // Serial.println(buf);
-    mqtt.publish(topic, buf);
+    if (serializeJson(doc, buf, sizeof(buf)) == 0) {
+        Serial.println("[TX] JSON too large");
+        return;
+    }
+
+    Serial.printf("[TX] %s -> %s\n", topic, buf);
+    _mqtt.publish(topic, buf);
 }

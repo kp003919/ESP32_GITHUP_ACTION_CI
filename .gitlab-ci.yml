@@ -19,7 +19,7 @@ ci_tests:
     - echo "=== CI DIRECTORY STRUCTURE ==="
     - ls -R .
     - pytest -m "not hil" -v --junitxml=report.xml
-
+# The above command runs all tests EXCEPT those marked with "hil". The results are saved in "report.xml" in JUnit format, which GitLab can use to display test results. 
   artifacts:
     reports:
       junit: report.xml
@@ -42,6 +42,7 @@ hil_tests:
   script:
     - pytest -m hil -v --junitxml=hil_report.xml
 
+# The above command runs ONLY the tests marked with "hil". The results are saved in "hil_report.xml" in JUnit format, which GitLab can use to display test results.   
   artifacts:
     reports:
       junit: hil_report.xml
