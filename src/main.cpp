@@ -54,6 +54,7 @@ const unsigned long RTLS_INTERVAL = 5000;
 const unsigned long I2C_INTERVAL  = 2000;
 const unsigned long SPI_INTERVAL  = 4000;
 const unsigned long UART_INTERVAL = 4000;
+const char* DEVICE_ID = "anchor_01";
 
 // Global comms object
 WiFiMQTT comms;
