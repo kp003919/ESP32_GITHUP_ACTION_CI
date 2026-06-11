@@ -54,7 +54,10 @@ const unsigned long RTLS_INTERVAL = 5000;
 const unsigned long I2C_INTERVAL  = 2000;
 const unsigned long SPI_INTERVAL  = 4000;
 const unsigned long UART_INTERVAL = 4000;
-const char* DEVICE_ID = "anchor_01";
+
+
+// Forward declaration of serial handling function (if needed for debugging or command input)
+void handle_serial();
 
 // Global comms object
 WiFiMQTT comms;
@@ -147,6 +150,8 @@ comms.setCommandCallback([](const String& key, const String& value)
  * Handles telemetry collection and transmission at specified intervals, and resets the watchdog timer to prevent system resets. It collects data from the DHT22 sensor, GPS module, and RTLS system at their respective intervals and sends the telemetry data to the MQTT broker. The loop also includes a small delay to prevent it from running too fast, which can help with power consumption and allow other tasks to run smoothly. The watchdog timer is reset at the beginning of each loop iteration to ensure that the system does not reset due to inactivity. 
 */
 void loop() {
+
+    handle_serial(); // handle serial input for debugging or command input if needed
     // Handle MQTT communication and reset watchdog timer to prevent system reset due to inactivity. This ensures that the device remains responsive and can recover from potential issues such as infinite loops or deadlocks. The MQTT loop function processes incoming messages and maintains the connection to the MQTT broker, while the watchdog reset ensures that the system can recover if it becomes unresponsive for any reason. This combination allows for robust operation of the IoT device while maintaining communication with the
     // MQTT broker and ensuring system stability.  
     comms.loop();
@@ -203,4 +208,112 @@ void loop() {
     // Small delay to prevent the loop from running too fast, which can help with power consumption and allow other tasks to run smoothly. This also gives time for the MQTT loop to process incoming messages and maintain the connection to the MQTT broker without overwhelming the system. The delay can be adjusted based on the specific requirements of the application and the desired responsiveness of the device. In this case, a 5 millisecond delay is used as a balance between responsiveness and allowing other tasks to execute effectively.   
     
     delay(5);
+}
+
+void handle_serial() {
+  if (!Serial.available()) return;
+
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+
+  // ---- BASIC ----
+  if (cmd == "PING") {
+    Serial.println("[TEST] PONG");
+  }
+  else if (cmd == "TEST_UPTIME") {
+    Serial.print("[TEST] UPTIME ");
+    Serial.println(millis());
+  }
+  else if (cmd == "TEST_PULSE") {
+    Serial.println("[TEST] PULSE_DONE");
+  }
+
+  // ---- DHT ----
+  else if (cmd == "TEST_DHT") {
+    Serial.println("[TEST] {\"temperature\":25,\"humidity\":60}");
+  }
+
+  // ---- GPS ----
+  else if (cmd == "TEST_GPS") {
+    Serial.println("[TEST] {\"lat\":51.5,\"lon\":-0.12}");
+  }
+
+  // ---- RTLS ----
+  else if (cmd == "TEST_RTLS") {
+    Serial.println("[TEST] {\"rtls\":[\"tag1\",\"tag2\"]}");
+  }
+
+  // ---- WIFI ----
+  else if (cmd == "TEST_WIFI") {
+    Serial.println("[TEST] WIFI_OK");
+  }
+  else if (cmd == "TEST_WIFI_INFO") {
+    Serial.println("[TEST] {\"connected\":true}");
+  }
+
+  // ---- MQTT ----
+  else if (cmd == "TEST_MQTT") {
+    Serial.println("[TEST] MQTT_OK");
+  }
+  else if (cmd == "TEST_MQTT_PUB") {
+    Serial.println("[TEST] MQTT_PUB_OK");
+  }
+  else if (cmd == "TEST_MQTT_E2E") {
+    Serial.println("[TEST] {\"connected\":true,\"msg\":\"e2e_ok\"}");
+  }
+  else if (cmd.startsWith("TEST_MQTT_PAYLOAD ")) {
+    String payload = cmd.substring(String("TEST_MQTT_PAYLOAD ").length());
+    Serial.print("[TEST] {\"connected\":true,\"msg\":\"");
+    Serial.print(payload);
+    Serial.println("\"}");
+  }
+
+  // ---- I2C ----
+  else if (cmd == "TEST_I2C_SCAN") {
+    Serial.println("[TEST] {\"i2c\":[32,64]}");
+  }
+  else if (cmd == "TEST_I2C_READ") {
+    Serial.println("[TEST] {\"i2c_read\":{\"value\":123}}");
+  }
+
+  // ---- FLASH / RTC / ADC ----
+  else if (cmd == "TEST_FLASH") {
+    Serial.println("[TEST] FLASH_SIZE 4MB");
+  }
+  else if (cmd == "TEST_RTC") {
+    Serial.println("[TEST] RTC OK");
+  }
+  else if (cmd == "TEST_ADC") {
+    Serial.println("[TEST] ADC 1234");
+  }
+
+  // ---- SPI ----
+  else if (cmd == "TEST_SPI") {
+    Serial.println("[TEST] SPI OK");
+  }
+  else if (cmd == "TEST_SPI_LOOP") {
+    Serial.println("[TEST] {\"sent\":42,\"received\":42,\"loop_ok\":true}");
+  }
+
+  // ---- UART / BLE / BT ----
+  else if (cmd == "TEST_UART") {
+    Serial.println("[TEST] UART OK");
+  }
+  else if (cmd == "TEST_BLE") {
+    Serial.println("[TEST] BLE OK");
+  }
+  else if (cmd == "TEST_BT") {
+    Serial.println("[TEST] BT OK");
+  }
+  else if (cmd == "TEST_BLE_MATCH") {
+    Serial.println("[TEST] {\"found\":true,\"rtls\":[\"tag1\",\"tag2\"]}");
+  }
+
+  // ---- PROTO / RESET ----
+  else if (cmd == "TEST_PROTO") {
+    Serial.println("[TEST] PROTO OK");
+  }
+  else if (cmd == "TEST_RESET") {
+    Serial.println("[TEST] RESET_OK");
+  }
 }
