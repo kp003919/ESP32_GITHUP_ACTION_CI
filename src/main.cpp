@@ -154,8 +154,10 @@ comms.setCommandCallback([](const String& key, const String& value)
  * Handles telemetry collection and transmission at specified intervals, and resets the watchdog timer to prevent system resets. It collects data from the DHT22 sensor, GPS module, and RTLS system at their respective intervals and sends the telemetry data to the MQTT broker. The loop also includes a small delay to prevent it from running too fast, which can help with power consumption and allow other tasks to run smoothly. The watchdog timer is reset at the beginning of each loop iteration to ensure that the system does not reset due to inactivity. 
 */
 void loop() {
-
+     
+    // test CI/CD 
     handle_serial(); // handle serial input for debugging or command input if needed
+    
     // Handle MQTT communication and reset watchdog timer to prevent system reset due to inactivity. This ensures that the device remains responsive and can recover from potential issues such as infinite loops or deadlocks. The MQTT loop function processes incoming messages and maintains the connection to the MQTT broker, while the watchdog reset ensures that the system can recover if it becomes unresponsive for any reason. This combination allows for robust operation of the IoT device while maintaining communication with the
     // MQTT broker and ensuring system stability.  
     comms.loop();
