@@ -33,13 +33,8 @@
 // Global backend selection
 BackendType backend = BACKEND_NODE_RED;
 
-// -----------------------------------------------------------------------------
-// MQTT topics
-// -----------------------------------------------------------------------------
-static const char* TOPIC_TELEMETRY   = "esp32/telemetry";
-static const char* TOPIC_FAN_CMD     = "esp32/fan/cmd";
-static const char* TOPIC_HEATER_CMD  = "esp32/heater/cmd";
-static const char* TOPIC_WIFI_CMD    = "esp32/anchor_01/wifi/cmd";
+
+
 
 // Static instance pointer for static callback trampoline
 WiFiMQTT* WiFiMQTT::instance = nullptr;
@@ -58,6 +53,13 @@ WiFiMQTT::WiFiMQTT()
 , _taskHandle(nullptr)
 {
 }
+
+
+
+WIFI_STATUS wifi_status = WIFI_STATUS_DISCONNECTED;
+MQTT_STATUS mqtt_status = MQTT_STATUS_DISCONNECTED;
+MQTT_PUB_STATUS mqtt_pub_status = MQTT_PUB_FAIL;
+
 
 // -----------------------------------------------------------------------------
 // Static MQTT callback → forwards to instance method
@@ -87,6 +89,8 @@ void WiFiMQTT::begin() {
     Serial.print("\n[WiFi] Connected. IP=");
     Serial.println(WiFi.localIP());
 
+    
+
     configureMQTT();
 }
 
@@ -113,6 +117,12 @@ void WiFiMQTT::configureMQTT() {
 // ensureWifi() — Auto‑reconnect WiFi every 5 seconds if disconnected
 // -----------------------------------------------------------------------------
 void WiFiMQTT::ensureWifi() {
+    if (WiFi.status() == WL_CONNECTED) {
+         wifi_status = WIFI_STATUS_CONNECTED;
+         return;
+    }
+
+    wifi_status = WIFI_STATUS_CONNECTING;
     unsigned long now = millis();
     if (now - _lastWifiCheck < 5000) return;
     _lastWifiCheck = now;
@@ -121,6 +131,10 @@ void WiFiMQTT::ensureWifi() {
         Serial.println("[WiFi] Lost connection, reconnecting...");
         WiFi.disconnect();
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        wifi_status = WIFI_STATUS_CONNECTED;
+
+    } else {
+        wifi_status = WIFI_STATUS_DISCONNECTED;
     }
 }
 
@@ -128,8 +142,14 @@ void WiFiMQTT::ensureWifi() {
 // ensureMqtt() — Reconnect MQTT with exponential backoff
 // -----------------------------------------------------------------------------
 void WiFiMQTT::ensureMqtt() {
-    if (_mqtt.connected()) return;
+    if (_mqtt.connected())
+    { 
+        mqtt_status = MQTT_STATUS_CONNECTED;
+        return; 
 
+    } 
+     
+    mqtt_status = MQTT_STATUS_CONNECTING;
     unsigned long now = millis();
     if (now - _lastMqttReconnect < _mqttBackoffMs) return;
     _lastMqttReconnect = now;
@@ -149,6 +169,7 @@ void WiFiMQTT::ensureMqtt() {
 
     if (ok) {
         Serial.println("[MQTT] Connected.");
+        mqtt_status = MQTT_STATUS_CONNECTED;
 
         // Subscribe to command topics
         _mqtt.subscribe(TOPIC_FAN_CMD);
@@ -159,6 +180,7 @@ void WiFiMQTT::ensureMqtt() {
         _mqttBackoffMs = 3000;
     } else {
         Serial.printf("[MQTT] Failed. State=%d\n", _mqtt.state());
+            mqtt_status = MQTT_STATUS_DISCONNECTED;
 
         // Exponential backoff (max 60s)
         _mqttBackoffMs = min<uint32_t>(_mqttBackoffMs * 2, 60000);
@@ -306,15 +328,18 @@ void WiFiMQTT::sendTelemetry(const JsonDocument& doc) {
 void WiFiMQTT::publish(const char* topic, const JsonDocument& doc) {
     if (!_mqtt.connected()) {
         Serial.println("[TX] MQTT not connected, dropping publish");
+        mqtt_pub_status = MQTT_PUB_FAIL;
         return;
     }
 
     char buf[512];
     if (serializeJson(doc, buf, sizeof(buf)) == 0) {
         Serial.println("[TX] JSON too large");
+        mqtt_pub_status = MQTT_PUB_FAIL;
         return;
     }
-
+    
+    mqtt_pub_status = MQTT_PUB_OK;
     Serial.printf("[TX] %s -> %s\n", topic, buf);
     _mqtt.publish(topic, buf);
 }

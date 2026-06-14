@@ -25,19 +25,24 @@
 #include "dht/Sensors.h"
 #include "gps/GPS.h"
 #include "rtls/RTLS.h"
+#include "comms/WiFiMQTT.h"
 
 // Protocols (SPI,UART,I2C)
 #include <SPI.h>
 #include "spi_driver.h"
 #include "uart_driver.h"
 #include "I2C_Driver.h"
+#include "Wire.h"
 
 // Comms    
 #include "comms/WiFiMQTT.h"
+// sensors 
+#include "dht/Sensors.h"
+#include "gps/GPS.h"
+#include "rtls/RTLS.h"  
+
 
 // Actuator pins    
-#define FAN_PIN  8     //   fan ON/OFF
-#define HEATER_PIN 18  // heater ON/OFF
 
 // Timing variables for telemetry intervals 
 unsigned long lastDHT  = 0;
@@ -91,11 +96,10 @@ void setup() {
 
     // Set up actuator pins and ensure they are in a known state (OFF) at startup       
     pinMode(FAN_PIN, OUTPUT);
-    digitalWrite(FAN_PIN, LOW);
+    pinMode(HEATER_PIN, OUTPUT);   
      
-    // TURN OFF FAN AND HEATER 
-    pinMode(FAN_PIN, OUTPUT);
-    pinMode(HEATER_PIN, OUTPUT);
+    // TURN OFF FAN AND HEATER     
+    digitalWrite(FAN_PIN, LOW);
     digitalWrite(FAN_PIN, LOW);
     digitalWrite(HEATER_PIN, LOW);
 
@@ -210,13 +214,17 @@ void loop() {
     delay(5);
 }
 
+
+
+
+// -------------------- COMMAND HANDLER --------------------
 void handle_serial() {
   if (!Serial.available()) return;
 
   String cmd = Serial.readStringUntil('\n');
   cmd.trim();
 
-  // ---- BASIC ----
+  // ---------- BASIC ----------
   if (cmd == "PING") {
     Serial.println("[TEST] PONG");
   }
@@ -225,95 +233,201 @@ void handle_serial() {
     Serial.println(millis());
   }
   else if (cmd == "TEST_PULSE") {
+    // simple pulse on a pin if you want; here just acknowledge
     Serial.println("[TEST] PULSE_DONE");
   }
 
-  // ---- DHT ----
+  // ---------- DHT ----------
   else if (cmd == "TEST_DHT") {
-    Serial.println("[TEST] {\"temperature\":25,\"humidity\":60}");
+    StaticJsonDocument<64> doc;       
+    Sensors_read(doc);        
+    float t = doc["temperature"];
+    float h = doc["humidity"]   ;
+
+    if (isnan(t) || isnan(h)) {
+      Serial.println("[TEST] {\"error\":\"sensor_fail\"}");
+      return;
+    }
+    Serial.printf("[TEST] {\"temperature\":%.2f,\"humidity\":%.2f}\n", t, h);
   }
 
-  // ---- GPS ----
-  else if (cmd == "TEST_GPS") {
-    Serial.println("[TEST] {\"lat\":51.5,\"lon\":-0.12}");
-  }
+  // ---------- GPS ----------
+  else if (cmd == "TEST_GPS") {   
+    StaticJsonDocument<64> doc;
+    GPS_fill(doc);
+    if (!doc.containsKey("lat") || !doc.containsKey("lon")) {      
+      Serial.println("[TEST] {\"error\":\"no_fix\"}");    
+  } else {
+      float lat = doc["lat"];
+      float lon = doc["lon"];
+      Serial.printf("[TEST] {\"lat\":%.6f,\"lon\":%.6f}\n", lat, lon);
+    }
+  } 
 
-  // ---- RTLS ----
+  // ---------- RTLS (placeholder: BLE/RTLS is complex) ----------
   else if (cmd == "TEST_RTLS") {
-    Serial.println("[TEST] {\"rtls\":[\"tag1\",\"tag2\"]}");
+    // For now, you can treat this as "no tags found" or integrate BLE later
+    StaticJsonDocument<64> doc;   
+    RTLS_fill(doc);
+    if (!doc.containsKey("rtls")) {
+        Serial.println("[TEST] {\"error\":\"rtls_fail\"}");
+        return;
+    }  
+
+    Serial.print("[TEST] {\"rtls\":[");
+    JsonArray arr = doc["rtls"].as<JsonArray>();    
+    for (size_t i = 0; i < arr.size(); i++) {
+        JsonObject tag = arr[i].as<JsonObject>();
+        Serial.printf("{\"id\":\"%s\",\"rssi\":%d}", tag["id"].as<const char*>(), tag["rssi"].as<int>());
+        if (i < arr.size() - 1) Serial.print(",");
+    }   
+    Serial.println("]}");
   }
 
-  // ---- WIFI ----
-  else if (cmd == "TEST_WIFI") {
-    Serial.println("[TEST] WIFI_OK");
+  // ---------- WIFI ----------
+  else if (cmd == "TEST_WIFI") { 
+    if (wifi_status == WIFI_STATUS_CONNECTED) {
+      Serial.println("[TEST] WIFI_OK");
+    } else {
+      Serial.println("[TEST] WIFI_FAIL");
+    }
   }
   else if (cmd == "TEST_WIFI_INFO") {
-    Serial.println("[TEST] {\"connected\":true}");
+    bool connected = (WiFi.status() == WL_CONNECTED);
+    Serial.printf("[TEST] {\"connected\":%s}\n", connected ? "true" : "false");
   }
 
-  // ---- MQTT ----
-  else if (cmd == "TEST_MQTT") {
-    Serial.println("[TEST] MQTT_OK");
+  // ---------- MQTT ----------
+  else if (cmd == "TEST_MQTT") {    
+    if (mqtt_status == MQTT_STATUS_CONNECTED) {
+      Serial.println("[TEST] MQTT_OK");
+    } else {
+      Serial.println("[TEST] MQTT_FAIL");
+    }
   }
-  else if (cmd == "TEST_MQTT_PUB") {
-    Serial.println("[TEST] MQTT_PUB_OK");
+  else if (cmd == "TEST_MQTT_PUB") {     
+    if (mqtt_pub_status == MQTT_PUB_OK) {
+      Serial.printf("[TEST] {\"mqtt_pub_status\":\"MQTT_PUB_OK\"}\n" );
+    }else if (mqtt_pub_status == MQTT_PUB_FAIL) {
+      Serial.printf("[TEST] {\"mqtt_pub_status\":\"MQTT_PUB_FAIL\"}\n" );
+    } else {
+      Serial.printf("[TEST] {\"mqtt_pub_status\":\"MQTT_PUB_UNKNOWN\"}\n" );
+    }      
   }
-  else if (cmd == "TEST_MQTT_E2E") {
-    Serial.println("[TEST] {\"connected\":true,\"msg\":\"e2e_ok\"}");
+  else if (cmd == "TEST_MQTT_E2E") {  
+    Serial.printf("[TEST] TEST_MQTT_E2E OK \n" );  // need update later     
   }
   else if (cmd.startsWith("TEST_MQTT_PAYLOAD ")) {
-    String payload = cmd.substring(String("TEST_MQTT_PAYLOAD ").length());
-    Serial.print("[TEST] {\"connected\":true,\"msg\":\"");
+    String payload = cmd.substring(String("TEST_MQTT_PAYLOAD ").length());   
+    bool ok = false;
+    PubSubClient mqttClient;
+    if (mqtt_status == MQTT_STATUS_CONNECTED) {
+      ok = mqttClient.publish(TOPIC_TEST_CMD , payload.c_str());
+    }
+    Serial.print("[TEST] {\"connected\":");
+    if (mqtt_status == MQTT_STATUS_CONNECTED) {
+      Serial.print("true");
+    } else {
+      Serial.print("false");
+    }
+    
+    Serial.print(",\"msg\":\"");
     Serial.print(payload);
     Serial.println("\"}");
   }
 
-  // ---- I2C ----
+  // ---------- I2C ----------
   else if (cmd == "TEST_I2C_SCAN") {
-    Serial.println("[TEST] {\"i2c\":[32,64]}");
+    Serial.print("[TEST] {\"i2c\":[");
+    bool first = true;
+    for (uint8_t addr = 1; addr < 127; addr++) {
+      Wire.beginTransmission(addr);
+      if (Wire.endTransmission() == 0) {
+        if (!first) Serial.print(",");
+        Serial.print(addr);
+        first = false;
+      }
+    }
+    Serial.println("]}");
   }
   else if (cmd == "TEST_I2C_READ") {
-    Serial.println("[TEST] {\"i2c_read\":{\"value\":123}}");
+    // Example: read one byte from a known device (adjust address/register)
+    uint8_t addr = 0x40; // example
+    uint8_t value = 0;
+    Wire.beginTransmission(addr);
+    Wire.write(0x00); // register
+    if (Wire.endTransmission(false) == 0 && Wire.requestFrom(addr, (uint8_t)1) == 1) {
+      value = Wire.read();
+      Serial.printf("[TEST] {\"i2c_read\":{\"value\":%u}}\n", value);
+    } else {
+      Serial.println("[TEST] {\"i2c_read\":{\"error\":\"no_device\"}}");
+    }
   }
 
-  // ---- FLASH / RTC / ADC ----
+  // ---------- FLASH ----------
   else if (cmd == "TEST_FLASH") {
-    Serial.println("[TEST] FLASH_SIZE 4MB");
-  }
-  else if (cmd == "TEST_RTC") {
-    Serial.println("[TEST] RTC OK");
-  }
-  else if (cmd == "TEST_ADC") {
-    Serial.println("[TEST] ADC 1234");
+    uint32_t size = ESP.getFlashChipSize();
+    Serial.printf("[TEST] FLASH_SIZE %u\n", size);
   }
 
-  // ---- SPI ----
+  // ---------- RTC ----------
+  else if (cmd == "TEST_RTC") {
+    time_t now = time(nullptr);
+    Serial.printf("[TEST] RTC %ld\n", (long)now);
+  }
+
+  // ---------- ADC ----------
+  else if (cmd == "TEST_ADC") {
+    int val = analogRead(34); // adjust pin
+    Serial.printf("[TEST] ADC %d\n", val);
+  }
+
+  // ---------- SPI ----------
   else if (cmd == "TEST_SPI") {
     Serial.println("[TEST] SPI OK");
   }
   else if (cmd == "TEST_SPI_LOOP") {
-    Serial.println("[TEST] {\"sent\":42,\"received\":42,\"loop_ok\":true}");
+    uint8_t send = 42;
+    uint8_t recv = 0;
+
+    //digitalWrite(SPI_CS, LOW);
+    recv = SPI.transfer(send);
+    //digitalWrite(SPI_CS, HIGH);
+
+    bool ok = (send == recv);
+    Serial.printf("[TEST] {\"sent\":%u,\"received\":%u,\"loop_ok\":%s}\n",
+                  send, recv, ok ? "true" : "false");
   }
 
-  // ---- UART / BLE / BT ----
+  // ---------- UART ----------
   else if (cmd == "TEST_UART") {
+    // Example: echo test on Serial2 if looped back
     Serial.println("[TEST] UART OK");
   }
+
+  // ---------- BLE / BT (placeholder) ----------
   else if (cmd == "TEST_BLE") {
+    // Real BLE scanning requires NimBLE or BLE library; placeholder:
     Serial.println("[TEST] BLE OK");
   }
   else if (cmd == "TEST_BT") {
+    // Classic BT is more complex; placeholder:
     Serial.println("[TEST] BT OK");
   }
   else if (cmd == "TEST_BLE_MATCH") {
-    Serial.println("[TEST] {\"found\":true,\"rtls\":[\"tag1\",\"tag2\"]}");
+    // Placeholder: no RTLS tags found
+    Serial.println("[TEST] {\"found\":false,\"rtls\":[]}");
   }
 
-  // ---- PROTO / RESET ----
+  // ---------- PROTO ----------
   else if (cmd == "TEST_PROTO") {
     Serial.println("[TEST] PROTO OK");
   }
+
+  // ---------- RESET ----------
   else if (cmd == "TEST_RESET") {
     Serial.println("[TEST] RESET_OK");
+    // ESP.restart(); // enable if you want real reset
   }
 }
+
