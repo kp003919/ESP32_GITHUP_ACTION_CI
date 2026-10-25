@@ -87,9 +87,7 @@ void WiFiMQTT::begin() {
     }
 
     Serial.print("\n[WiFi] Connected. IP=");
-    Serial.println(WiFi.localIP());
-
-    
+    Serial.println(WiFi.localIP());    
 
     configureMQTT();
 }

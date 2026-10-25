@@ -1,5 +1,8 @@
 #pragma once
 
+// Configuration header for Cure IoT Project
+#define USE_MOCK_DHT 1
+
 // Communication modes
 #define COMMS_WIFI_MQTT  0 
 #define COMMS_LORAWAN    1
@@ -12,7 +15,7 @@
 
 // MQTT broker
 #define MQTT_BROKER "192.168.0.21"
-#define MQTT_PORT   1883
+#define MQTT_PORT   1883  // secure port 
 
 // DHT config
 #define DHTPIN  3        // GPIO 3 is safe

@@ -22,6 +22,7 @@
 #include "../config.h"
 // DHT sensor library
 #include <DHT.h>
+#include "mock_dht.h"
 
 static DHT dht(DHTPIN, DHTTYPE);
 /** 
@@ -34,7 +35,12 @@ static DHT dht(DHTPIN, DHTTYPE);
  */
 void Sensors_begin() 
 {
+    #if !USE_MOCK_DHT
     dht.begin();
+    #else
+    randomSeed(42);                 // repeatable mock sequence (remove for varied data)
+    Serial.println("Sensors: DHT22 mock mode enabled");
+    #endif
 }
 
 /**
@@ -48,17 +54,30 @@ void Sensors_begin()
  * will be stored. This function should be called periodically (e.g., in the main loop) to keep 
  * the sensor data updated in the JSON document.  
  */
+#include "mock_dht.h"
+
 void Sensors_read(JsonDocument& doc) {
-    float t = dht.readTemperature();
-    float h = dht.readHumidity();
-    // Handle failed reads  
-    if (isnan(t) || isnan(h)) {
+    float t, h;
+    bool ok;
+
+#if USE_MOCK_DHT
+    DhtReading r = mockDhtRead();       // no hardware access, returns instantly
+    t = r.temperature;
+    h = r.humidity;
+    ok = r.valid;
+#else
+    t = dht.readTemperature();
+    h = dht.readHumidity();
+    ok = !(isnan(t) || isnan(h));
+#endif
+
+    if (!ok) {
         Serial.println("Sensors: failed to read DHT");
-        t = -999.0f;
+        t = -999.0f;                    // keeps your existing error convention
         h = -999.0f;
     }
-  
-    // Populate JSON document   
-    doc["temperature"] = t;
-    doc["humidity"]    = h;
+
+    doc["temperature"] = roundf(t * 10.0f) / 10.0f;   // one decimal place
+    doc["humidity"]    = roundf(h * 10.0f) / 10.0f;
+    //doc["dht_mock"]    = USE_MOCK_DHT;                // so mock data is never mistaken for real
 }

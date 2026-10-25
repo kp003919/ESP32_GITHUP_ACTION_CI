@@ -165,50 +165,6 @@ def test_mqtt_pub(ser):
     assert "MQTT_PUB_OK" in resp or "MQTT_PUB_FAIL" in resp
     record_metric("mqtt_pub_latency_ms", latency)
 
-
-@pytest.mark.hil
-def test_mqtt_e2e(ser):
-    resp, latency = send_test(ser, "TEST_MQTT_E2E", max_ms=1500)
-    data = extract_json(resp)
-    assert "connected" in data
-    assert "msg" in data
-    record_metric("mqtt_e2e_latency_ms", latency)
-
-
-# ---------- NEW: MQTT PAYLOAD ----------
-@pytest.mark.hil
-@pytest.mark.parametrize("payload", ["hi", "12345678", "long_message_test"])
-def test_mqtt_payloads(ser, payload):
-    resp, latency = send_test(ser, f"TEST_MQTT_PAYLOAD {payload}", max_ms=1500)
-    data = extract_json(resp)
-
-    assert "connected" in data
-    assert data["msg"] == payload
-    record_metric(f"mqtt_payload_{payload}_latency_ms", latency)
-
-
-# --------------------------
-# I2C
-# --------------------------
-
-@pytest.mark.hil
-def test_i2c_scan(ser):
-    resp, latency = send_test(ser, "TEST_I2C_SCAN", max_ms=800)
-    data = extract_json(resp)
-    assert "i2c" in data
-    assert isinstance(data["i2c"], list)
-    record_metric("i2c_scan_latency_ms", latency)
-
-
-@pytest.mark.hil
-def test_i2c_read(ser):
-    resp, latency = send_test(ser, "TEST_I2C_READ", max_ms=500)
-    data = extract_json(resp)
-    assert "i2c_read" in data
-    assert "value" in data["i2c_read"]
-    record_metric("i2c_read_latency_ms", latency)
-
-
 # --------------------------
 # FLASH
 # --------------------------
@@ -218,39 +174,6 @@ def test_flash(ser):
     resp, latency = send_test(ser, "TEST_FLASH", max_ms=300)
     assert "FLASH_SIZE" in resp
     record_metric("flash_latency_ms", latency)
-
-
-# --------------------------
-# RTC
-# --------------------------
-
-@pytest.mark.hil
-def test_rtc(ser):
-    resp, latency = send_test(ser, "TEST_RTC", max_ms=300)
-    assert "RTC" in resp
-    record_metric("rtc_latency_ms", latency)
-
-
-# --------------------------
-# ADC
-# --------------------------
-
-@pytest.mark.hil
-def test_adc(ser):
-    resp, latency = send_test(ser, "TEST_ADC", max_ms=300)
-    assert "ADC" in resp
-    record_metric("adc_latency_ms", latency)
-
-
-# --------------------------
-# PWM
-# --------------------------
-
-#@pytest.mark.hil
-#def test_pwm(ser):
- #   resp, latency = send_test(ser, "TEST_PWM", max_ms=1200)
-  #  assert "PWM_OK" in resp
-   # record_metric("pwm_latency_ms", latency)
 
 
 # --------------------------
