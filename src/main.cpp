@@ -147,6 +147,7 @@ comms.setCommandCallback([](const String& key, const String& value)
         Serial.println("[CMD] ERROR: Unknown key");
     }
 });
+comms.startTask(1, 8192, 1);   // priority 1, 8 KB stack, core 1
 }
 
 /** 
@@ -160,7 +161,6 @@ void loop() {
 
     // Handle MQTT communication and reset watchdog timer to prevent system reset due to inactivity. This ensures that the device remains responsive and can recover from potential issues such as infinite loops or deadlocks. The MQTT loop function processes incoming messages and maintains the connection to the MQTT broker, while the watchdog reset ensures that the system can recover if it becomes unresponsive for any reason. This combination allows for robust operation of the IoT device while maintaining communication with the
     // MQTT broker and ensuring system stability.  
-    comms.loop();
     esp_task_wdt_reset();
     // Update sensors and send telemetry at specified intervals     
     GPS_update();
