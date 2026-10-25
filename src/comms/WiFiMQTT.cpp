@@ -15,6 +15,14 @@
 #include "../config.h"
 #include "../secrets_new.h"
 
+// One queued message. 64 entries is roughly 19 KB of heap and holds about 3 minutes
+// of telemetry (3 messages per 5 s cycle). Tune this later.
+struct TxItem {
+    char topic[48];
+    char payload[256];
+};
+static const size_t TX_QUEUE_LEN = 64;
+
 // -----------------------------------------------------------------------------
 // Default MQTT broker settings (can be overridden in config.h)
 // -----------------------------------------------------------------------------
@@ -75,6 +83,7 @@ void WiFiMQTT::mqttCallbackStatic(char* topic, byte* payload, unsigned int lengt
 // -----------------------------------------------------------------------------
 void WiFiMQTT::begin() {
     instance = this;
+    _txQueue = xQueueCreate(TX_QUEUE_LEN, sizeof(TxItem));
 
     Serial.println("[WiFi] Connecting...");
     WiFi.mode(WIFI_STA);
@@ -104,7 +113,7 @@ void WiFiMQTT::configureMQTT() {
     Serial.println("[MQTT] Using plain TCP");
     _mqtt.setClient(_plainClient);
 #endif
-
+    _mqtt.setBufferSize(512);
     _mqtt.setServer(MQTT_BROKER, MQTT_PORT);
     _mqtt.setCallback(WiFiMQTT::mqttCallbackStatic);
 
@@ -194,6 +203,15 @@ void WiFiMQTT::loop() {
 
     if (_mqtt.connected()) {
         _mqtt.loop();
+        drainQueue();
+    }
+
+    static uint32_t lastStat = 0;
+    if (millis() - lastStat > 10000) {
+        lastStat = millis();
+        Serial.printf("[STAT] queued=%u dropped=%lu heap=%u\n",
+                      (unsigned)uxQueueMessagesWaiting(_txQueue),
+                      (unsigned long)_dropped, (unsigned)ESP.getFreeHeap());
     }
 }
 
@@ -301,43 +319,48 @@ void WiFiMQTT::handleMqttMessage(char* topic, byte* payload, unsigned int length
     _commandCallback(key, value);
 }
 
-// -----------------------------------------------------------------------------
-// sendTelemetry() — Publish JSON telemetry
-// -----------------------------------------------------------------------------
 void WiFiMQTT::sendTelemetry(const JsonDocument& doc) {
-    if (!_mqtt.connected()) {
-        Serial.println("[TX] MQTT not connected, dropping telemetry");
-        return;
-    }
-
-    char buf[512];
-    if (serializeJson(doc, buf, sizeof(buf)) == 0) {
-        Serial.println("[TX] JSON too large");
-        return;
-    }
-
-    Serial.println("[TX] Telemetry -> esp32/telemetry");
-    _mqtt.publish(TOPIC_TELEMETRY, buf);
+    enqueue(TOPIC_TELEMETRY, doc);
 }
 
-// -----------------------------------------------------------------------------
-// publish() — Generic JSON publish
-// -----------------------------------------------------------------------------
 void WiFiMQTT::publish(const char* topic, const JsonDocument& doc) {
-    if (!_mqtt.connected()) {
-        Serial.println("[TX] MQTT not connected, dropping publish");
-        mqtt_pub_status = MQTT_PUB_FAIL;
-        return;
-    }
+    enqueue(topic, doc);
+}
 
-    char buf[512];
-    if (serializeJson(doc, buf, sizeof(buf)) == 0) {
+// Called from the sensor side: never blocks, never touches the MQTT client.
+bool WiFiMQTT::enqueue(const char* topic, const JsonDocument& doc) {
+    if (!_txQueue) return false;
+
+    TxItem item;
+    if (measureJson(doc) >= sizeof(item.payload)) {
         Serial.println("[TX] JSON too large");
-        mqtt_pub_status = MQTT_PUB_FAIL;
-        return;
+        return false;
     }
-    
-    mqtt_pub_status = MQTT_PUB_OK;
-    Serial.printf("[TX] %s -> %s\n", topic, buf);
-    _mqtt.publish(topic, buf);
+    serializeJson(doc, item.payload, sizeof(item.payload));
+    strlcpy(item.topic, topic, sizeof(item.topic));
+
+    if (xQueueSend(_txQueue, &item, 0) != pdTRUE) {
+        TxItem oldest;                                   // queue full: drop the OLDEST
+        xQueueReceive(_txQueue, &oldest, 0);
+        _dropped++;
+        if (xQueueSend(_txQueue, &item, 0) != pdTRUE) { _dropped++; return false; }
+    }
+    return true;
+}
+
+// Called only from the MQTT task.
+void WiFiMQTT::drainQueue() {
+    TxItem item;
+    while (_mqtt.connected() && xQueueReceive(_txQueue, &item, 0) == pdTRUE) {
+        if (_mqtt.publish(item.topic, item.payload)) {
+            mqtt_pub_status = MQTT_PUB_OK;
+        } else if (!_mqtt.connected()) {
+            xQueueSendToFront(_txQueue, &item, 0);       // connection lost: keep it
+            mqtt_pub_status = MQTT_PUB_FAIL;
+            break;
+        } else {
+            Serial.printf("[TX] publish failed, dropping message for %s\n", item.topic);
+            mqtt_pub_status = MQTT_PUB_FAIL;
+        }
+    }
 }

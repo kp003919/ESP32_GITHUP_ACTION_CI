@@ -9,6 +9,7 @@
 #include <PubSubClient.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/queue.h>
 
 #include "spi_driver.h"
 #include "uart_driver.h"
@@ -167,6 +168,11 @@ private:
     uint32_t          _mqttBackoffMs = 1000;
 
     TaskHandle_t      _taskHandle = nullptr;
+    QueueHandle_t _txQueue = nullptr;
+    uint32_t      _dropped = 0;
+    bool enqueue(const char* topic, const JsonDocument& doc);
+    void drainQueue();
+
     
     // Private methods for internal operations  
     void configureMQTT();
