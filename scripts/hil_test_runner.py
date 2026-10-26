@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """
 Hardware-in-the-Loop Test Runner
-Flashes firmware → opens serial port → sends TEST_* commands → PASS/FAIL
 """
 import serial
 import time
 import os
 import sys
 
-# ========== CONFIGURATION ==========
+# Fix Windows console encoding to accept all characters
+if os.name == 'nt':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+# Configuration
 PORT = os.getenv("SERIAL_PORT", "COM7")
 BAUD = int(os.getenv("SERIAL_BAUD", 115200))
 PER_TEST_TIMEOUT = 5
 
-# ========== TEST DEFINITION ==========
+# Test list
 TESTS = [
-    ("PING",              "[TEST] PONG"),
+    ("PING",              "PONG"),
     ("TEST_UPTIME",       "UPTIME"),
     ("TEST_DHT",          "temperature"),
     ("TEST_GPS",          "lat"),
@@ -32,13 +35,17 @@ TESTS = [
     ("TEST_RESET",        "RESET_OK"),
 ]
 
-# ========== RUNNER ==========
+def clean_text(text):
+    """Remove/replace characters that crash Windows console"""
+    return text.encode('ascii', errors='replace').decode('ascii')
+
 def main():
-    print(f"[HIL] Connecting to {PORT} @ {BAUD} baud...")
+    print("[HIL] Connecting to " + PORT + " at " + str(BAUD) + " baud...")
     
-    # Give board time to restart after flashing
+    # Wait for board to be ready after flash
     time.sleep(6)
     
+    # Open serial port
     try:
         ser = serial.Serial(
             port=PORT,
@@ -47,12 +54,12 @@ def main():
             write_timeout=1
         )
     except Exception as e:
-        print(f"[HIL] ERROR: Cannot open port: {e}")
-        print(f"[HIL] Check: board connected? Port {PORT} correct? No other program using it?")
+        print("[HIL] ERROR: Cannot open port")
+        print("[HIL] DETAILS: " + str(e))
+        print("[HIL] Make sure: board is connected, no other program uses COM7")
         return 1
 
-    # Wait for boot messages
-    time.sleep(2.5)
+    time.sleep(2)
     ser.reset_input_buffer()
     print("[HIL] Connected. Starting tests...")
     print("-" * 50)
@@ -61,11 +68,11 @@ def main():
     failed = 0
 
     for cmd, expected in TESTS:
-        print(f"TEST: {cmd}")
+        print("TEST: " + cmd)
         try:
-            ser.write(f"{cmd}\n".encode('utf-8'))
+            ser.write((cmd + "\n").encode('utf-8'))
         except Exception as e:
-            print(f"  ERROR: Send failed - {e}")
+            print("  FAIL: Send error - " + str(e))
             failed += 1
             continue
 
@@ -75,7 +82,8 @@ def main():
             if ser.in_waiting > 0:
                 line = ser.readline().decode('utf-8', errors='replace').strip()
                 if line:
-                    print(f"  RECV: {line}")
+                    safe_line = clean_text(line)
+                    print("  RECV: " + safe_line)
                     if expected in line:
                         found = True
                         break
@@ -85,22 +93,22 @@ def main():
             print("  PASS")
             passed += 1
         else:
-            print(f"  FAIL - expecting: '{expected}'")
+            print("  FAIL - expected: " + expected)
             failed += 1
         print("")
 
     ser.close()
 
-    # ========== SUMMARY ==========
+    # Summary
     print("=" * 50)
     total = passed + failed
-    print(f"RESULTS: {passed}/{total} passed")
+    print("RESULTS: " + str(passed) + "/" + str(total) + " passed")
 
     if failed == 0:
         print("ALL TESTS PASSED")
         return 0
     else:
-        print(f"{failed} test(s) FAILED")
+        print(str(failed) + " test(s) FAILED")
         return 1
 
 if __name__ == "__main__":
