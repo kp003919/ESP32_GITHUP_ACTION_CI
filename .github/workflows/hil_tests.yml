@@ -1,0 +1,38 @@
+name: 🔌 ESP32 HIL Pipeline
+on:
+  push:
+    branches:
+      - main
+      - freertos-tasks
+  pull_request:
+    branches:
+      - main
+      - freertos-tasks
+  workflow_dispatch:
+
+jobs:
+  hil_test:
+    name: Build → Flash → Test
+    runs-on:
+      - self-hosted
+      - esp32_iot_rtos
+    timeout-minutes: 15
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Install dependencies
+        run: pip install platformio pyserial
+
+      - name: 🔨 Build firmware
+        run: pio run
+
+      - name: ⚡ Flash to ESP32
+        run: pio run -t upload
+
+      - name: 🧪 Run HIL serial tests
+        run: python scripts/hil_test_runner.py
+        env:
+          SERIAL_PORT: COM7
+          SERIAL_BAUD: 115200
