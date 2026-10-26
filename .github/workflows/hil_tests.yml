@@ -36,3 +36,4 @@ jobs:
         env:
           SERIAL_PORT: COM7
           SERIAL_BAUD: 115200
+          PYTHONIOENCODING: utf-8
