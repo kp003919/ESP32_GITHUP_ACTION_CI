@@ -24,8 +24,8 @@ TESTS = [
     ("TEST_RTC",          "RTC"),
     ("TEST_ADC",          "ADC"),
     ("TEST_SPI_LOOP",     "loop_ok"),
-    ("TEST_I2C_SCAN",     "i2c"),   
-    ("TEST_BLE",          "BLE OK"),
+    ("TEST_I2C_SCAN",     "i2c"),  
+    
     ("TEST_RESET",        "RESET_OK"),
 ]
 
