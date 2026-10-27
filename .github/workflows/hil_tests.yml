@@ -12,7 +12,7 @@ on:
 
 jobs:
   hil_test:
-    name: Build → Flash → Test
+    name: Build → Flash → Test → Report
     runs-on:
       - self-hosted
       - esp32_iot_rtos
@@ -22,8 +22,11 @@ jobs:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
 
+      - name: 📁 Create output directories
+        run: mkdir -p docs scripts
+
       - name: 🛠️ Install dependencies
-        run: pip install platformio pyserial
+        run: pip install platformio pyserial matplotlib
 
       - name: 🔨 Build firmware
         run: pio run
@@ -32,8 +35,24 @@ jobs:
         run: pio run -t upload
 
       - name: 🧪 Run HIL serial tests
+        id: test_run
         run: python scripts/hil_test_runner.py
         env:
           SERIAL_PORT: COM7
           SERIAL_BAUD: 115200
           PYTHONIOENCODING: utf-8
+
+      - name: 📊 Generate Report & Graphs
+        run: python scripts/generate_report.py
+
+      - name: 📤 Upload Test Report Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hil-test-report-${{ github.run_id }}
+          path: |
+            docs/REPORT.html
+            docs/test_results.png
+            docs/gap_comparison.png
+            docs/lost_messages.png
+          retention-days: 30

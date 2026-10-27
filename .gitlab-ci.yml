@@ -2,24 +2,44 @@ variables:
   GIT_STRATEGY: clone
 
 stages:
+  - build
   - test
 
-# -----------------------------
-# 1) CI TESTS (run in GitLab)
-# -----------------------------
+# ==============================================
+# STAGE 1: Build Firmware (GitLab Cloud)
+# ==============================================
+build_firmware:
+  stage: build
+  image: python:3.11
+  before_script:
+    - pip install --upgrade pip
+    - pip install platformio
+  script:
+    - echo "=== Building ESP32 Firmware ==="
+    - pio run
+    - echo "=== Build Complete ==="
+  artifacts:
+    paths:
+      - .pio/build/
+    expire_in: 1 week
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .pio/
+
+# ==============================================
+# STAGE 2: Software Tests (GitLab Cloud)
+# ==============================================
 ci_tests:
   stage: test
   image: python:3.11
-
   before_script:
     - pip install --upgrade pip
     - pip install -r requirements.txt
-
   script:
-    - echo "=== CI DIRECTORY STRUCTURE ==="
+    - echo "=== Running Software Tests ==="
     - ls -R .
     - pytest -m "not hil" -v --junitxml=report.xml
-# The above command runs all tests EXCEPT those marked with "hil". The results are saved in "report.xml" in JUnit format, which GitLab can use to display test results. 
   artifacts:
     reports:
       junit: report.xml
@@ -27,25 +47,30 @@ ci_tests:
       - report.xml
     expire_in: 1 week
 
-  cache:
-    key: ${CI_COMMIT_REF_SLUG}
-    paths:
-      - .cache/pip
-
-# -----------------------------------------
-# 2) HIL TESTS (run ONLY on your laptop)
-# -----------------------------------------
+# ==============================================
+# STAGE 3: HIL Hardware Tests (Your Laptop)
+# ==============================================
 hil_tests:
   stage: test
   tags:
-    - esp32        # This ensures GitLab sends the job to YOUR laptop
+    - esp32
+  dependencies:
+    - build_firmware
+  before_script:
+    - pip install --upgrade pip
+    - pip install -r requirements.txt
+    - pip install platformio pyserial
   script:
+    - echo "=== HIL: Flashing Firmware ==="
+    - pio run -t upload
+    - echo "=== HIL: Running Serial Test Suite ==="
+    - python3 scripts/hil_test_runner.py
+    - echo "=== HIL: Running Pytest HIL ==="
     - pytest -m hil -v --junitxml=hil_report.xml
-
-# The above command runs ONLY the tests marked with "hil". The results are saved in "hil_report.xml" in JUnit format, which GitLab can use to display test results.   
   artifacts:
     reports:
       junit: hil_report.xml
     paths:
       - hil_report.xml
     expire_in: 1 week
+  timeout: 15 minutes

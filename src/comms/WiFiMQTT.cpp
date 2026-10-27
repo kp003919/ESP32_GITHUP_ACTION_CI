@@ -101,13 +101,28 @@ void WiFiMQTT::begin() {
     configureMQTT();
 }
 
+// TLS checks the certificate's dates, so the ESP32 needs the real date first.
+static bool syncClock(uint32_t timeoutMs = 10000) {
+    if (time(nullptr) > 1700000000) return true;        // already set (after Nov 2023)
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    uint32_t start = millis();
+    while (time(nullptr) < 1700000000) {
+        if (millis() - start > timeoutMs) return false;
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    return true;
+}
+
 // -----------------------------------------------------------------------------
 // configureMQTT() — Select client (TLS or plain) and set callback
 // -----------------------------------------------------------------------------
 void WiFiMQTT::configureMQTT() {
 #if USE_MQTT_TLS
     Serial.println("[MQTT] Using TLS");
-    _secureClient.setInsecure();   // or setCACert(MQTT_CA_CERT)
+    if (!syncClock()) {
+        Serial.println("[MQTT] Clock not set (NTP failed): certificate dates cannot be checked");
+    }
+    _secureClient.setCACert(MQTT_CA_CERT);   // only trust brokers signed by my CA
     _mqtt.setClient(_secureClient);
 #else
     Serial.println("[MQTT] Using plain TCP");

@@ -11,6 +11,7 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 
+#include <time.h>
 #include "spi_driver.h"
 #include "uart_driver.h"
 #include "I2C_Driver.h"
@@ -65,6 +66,13 @@ extern BackendType backend;
 extern WIFI_STATUS wifi_status;
 extern MQTT_STATUS mqtt_status;
 extern MQTT_PUB_STATUS mqtt_pub_status;
+
+
+// WIFE and MQTT status enums
+extern WIFI_STATUS  wifi_status;
+extern MQTT_STATUS  mqtt_status;
+extern MQTT_PUB_STATUS mqtt_pub_status;
+
 
 /**
  * WiFiMQTT Class

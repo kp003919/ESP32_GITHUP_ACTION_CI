@@ -1,406 +1,247 @@
-
-/** 
- * Cure IoT Project - ESP32 Firmware    
- * This firmware is designed for an ESP32-based IoT device that collects data from various sensors (DHT22, GPS, RTLS) and communicates with a Node-RED instance running on a Raspberry Pi using MQTT. The device can also receive commands from MQTT to control actuators such as fans and heaters. The code is structured into separate modules for sensors, communication, and real-time location tracking (RTLS), allowing for modular development and maintenance. The main loop handles telemetry collection and transmission at specified intervals, while the command callback processes incoming MQTT messages to control the device's actuators.   
- * Author: Muhsin Atto
- * Date: 2024-06-01 
- * License: MIT License 
- * For more information on ESP32 development, sensor integration, and MQTT communication, refer to the
- *  ESP-IDF documentation, Arduino library documentation for the respective sensors, and the PubSubClient library documentation for MQTT communication.    
- * Details:     
- *  - Uses the Arduino framework for ESP32 development with C++14 standard
- *  - Integrates DHT22 for temperature and humidity, a GPS module for location data                 and time, and a custom RTLS implementation for tracking nearby BLE devices
- *  - Communicates with a Node-RED instance using MQTT for both telemetry and command handling               
- *              
+/**
+ * Cure IoT Project - ESP32 Firmware
+ * Main Application Entry Point
+ * =================================
  * 
+ * Overview:
+ *   Modular IoT firmware for ESP32-S3 collecting sensor data and sending
+ *   telemetry over WiFi/MQTT, plus receiving commands to control actuators.
+ * 
+ * Architecture:
+ *   - Core sensor/telemetry logic runs on CPU0 in main loop (non-blocking)
+ *   - MQTT/WiFi connection & reconnection runs on CPU1 as dedicated FreeRTOS task
+ *   - Data passes safely between them via thread-safe FreeRTOS queue
+ *   - Watchdog timer ensures automatic recovery from hangs/deadlocks
+ * 
+ * Modules:
+ *   - dht/        Temperature & humidity sensor
+ *   - gps/        GNSS location & time
+ *   - rtls/       BLE real-time location tracking
+ *   - comms/      WiFi + MQTT (separate FreeRTOS task)
+ *   - tests/      Serial diagnostic & CI/CD test commands
+ * 
+ * Author: Muhsin Atto
+ * Date: 2024-06-01
+ * License: MIT License
  */
 
+// ==============================================
+// SYSTEM & FRAMEWORK HEADERS
+// ==============================================
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include "config.h"
-#include "secrets_new.h"
-#include "esp_task_wdt.h"
+#include <esp_task_wdt.h>   // Watchdog timer
 
-// Sensors
-#include "dht/Sensors.h"
-#include "gps/GPS.h"
-#include "rtls/RTLS.h"
-#include "comms/WiFiMQTT.h"
+// ==============================================
+// PROJECT CONFIGURATION & SECRETS
+// ==============================================
+#include "config.h"          // Pins, intervals, device settings
+#include "secrets_new.h"     // WiFi/MQTT credentials (kept separate)
 
-// Protocols (SPI,UART,I2C)
+// ==============================================
+// DRIVER LAYER - COMMUNICATION BUSES
+// ==============================================
 #include <SPI.h>
 #include "spi_driver.h"
-#include "uart_driver.h"
+#include <Wire.h>            // I2C master
 #include "I2C_Driver.h"
-#include "Wire.h"
+#include "uart_driver.h"
 
-// Comms    
-#include "comms/WiFiMQTT.h"
-// sensors 
-#include "dht/Sensors.h"
-#include "gps/GPS.h"
-#include "rtls/RTLS.h"  
+// ==============================================
+// SENSOR & FUNCTION MODULES
+// ==============================================
+#include "dht/Sensors.h"     // Temp/humidity
+#include "gps/GPS.h"         // GNSS module
+#include "rtls/RTLS.h"       // BLE proximity tracking
+#include "comms/WiFiMQTT.h"  // WiFi + MQTT comms
+#include "TestCommands.h" // Serial test harness
 
+// ==============================================
+// TELEMETRY TIMING - INTERVALS
+// All values in milliseconds
+// ==============================================
+const unsigned long DHT_INTERVAL   = 5000;  // Temp/humidity: every 5s
+const unsigned long GPS_INTERVAL   = 5000;  // GPS fix: every 5s
+const unsigned long RTLS_INTERVAL  = 5000;  // BLE scan: every 5s
+const unsigned long I2C_INTERVAL    = 2000;  // Reserved - future use
+const unsigned long SPI_INTERVAL    = 4000;  // Reserved - future use
+const unsigned long UART_INTERVAL   = 4000;  // Reserved - future use
 
-// Actuator pins    
-
-// Timing variables for telemetry intervals 
+// ==============================================
+// TELEMETRY TIMESTAMP TRACKERS
+// Record millis() value when each sensor was LAST read
+// ==============================================
 unsigned long lastDHT  = 0;
 unsigned long lastGPS  = 0;
 unsigned long lastRTLS = 0;
-unsigned long lastI2C  = 0;
-unsigned long lastSPI  = 0;
-unsigned long lastUART = 0;
+unsigned long lastI2C  = 0;  // Reserved
+unsigned long lastSPI  = 0;  // Reserved
+unsigned long lastUART = 0;  // Reserved
 
-// Telemetry intervals (in milliseconds)    
-const unsigned long DHT_INTERVAL  = 5000;
-const unsigned long GPS_INTERVAL  = 5000;
-const unsigned long RTLS_INTERVAL = 5000;
-const unsigned long I2C_INTERVAL  = 2000;
-const unsigned long SPI_INTERVAL  = 4000;
-const unsigned long UART_INTERVAL = 4000;
-
-
-// Forward declaration of serial handling function (if needed for debugging or command input)
-void handle_serial();
-
-// Global comms object
+// ==============================================
+// GLOBAL OBJECTS
+// Single communication instance shared across the firmware
+// ==============================================
 WiFiMQTT comms;
 
-/** 
- * Setup function
- * Initializes all components and starts the system
-*/
+// ==============================================
+// SETUP - RUNS ONCE AT POWER-ON / RESET
+// ==============================================
 void setup() {
-    // Initialize serial communication for debugging    
+    // Initialise serial console (115200 baud) for debugging & diagnostics
     Serial.begin(115200);
-    delay(1000);
-    Serial.println("\nBooting...");
+    delay(1000);  // Allow time for USB/serial to connect
+    Serial.println(F("\nBooting Cure IoT Firmware..."));
 
-    // Initialize sensors, GPS, and RTLS    
-    Sensors_begin();
-    GPS_begin();
-    RTLS_begin();
+    // ---------- Initialise Sensors ----------
+    Sensors_begin();   // DHT22 temp/humidity
+    GPS_begin();       // GNSS receiver
+    RTLS_begin();      // BLE scanner for proximity
 
-    // Initialize watchdog timer to reset the system if it becomes unresponsive.
-    //  The timeout is set to 10 seconds, and the system will reset if the watchdog
-    //  is not reset within this period. This helps to ensure that the device can recover 
-    // from potential issues such as infinite loops or deadlocks. The watchdog should be 
-    // reset regularly in the main loop to prevent unintended resets during normal operation. 
+    // ---------- Watchdog Timer Setup ----------
+    // If loop() does not feed the watchdog within 10 seconds,
+    // the system assumes it is stuck and performs an automatic restart.
+    // This recovers from deadlocks, hangs, or unresponsive network calls.
+    esp_task_wdt_init(10, true);  // 10s timeout, panic on expiry
+    esp_task_wdt_add(NULL);        // Register current task (main loop)
 
-    esp_task_wdt_init(10, true);
-    esp_task_wdt_add(NULL);
-
-    // Initialize communication (WiFi and MQTT) 
+    // ---------- Communication Stack ----------
+    // Connect WiFi, establish MQTT settings
+    // begin() blocks until WiFi connects - see WiFiMQTT for retry options
+    Serial.println(F("[INIT] Starting comms..."));
     comms.begin();
 
-    // Set up actuator pins and ensure they are in a known state (OFF) at startup       
+    // Launch MQTT processing as a SEPARATE FreeRTOS task on CPU1
+    // Priority 1 = low (sensor timing takes precedence)
+    // Stack 12288 bytes = 12KB (TLS connections need extra buffer space)
+    // Core 1 = dedicated network core, leaves CPU0 free for sensors
+    comms.startTask(1, 12288, 1);
+
+    // ---------- Actuator Pins - Safe Default State ----------
+    // Set outputs LOW at power-on to ensure devices are OFF until commanded
     pinMode(FAN_PIN, OUTPUT);
-    pinMode(HEATER_PIN, OUTPUT);   
-     
-    // TURN OFF FAN AND HEATER     
-    digitalWrite(FAN_PIN, LOW);
-    digitalWrite(FAN_PIN, LOW);
-    digitalWrite(HEATER_PIN, LOW);
+    pinMode(HEATER_PIN, OUTPUT);
+    digitalWrite(FAN_PIN, LOW);     // Fan OFF
+    digitalWrite(HEATER_PIN, LOW);  // Heater OFF
+    Serial.println(F("[INIT] Actuators set to OFF"));
 
-/**
- * MQTT Command Callback
- * This callback function is registered with the MQTT client to handle incoming messages on subscribed topics. It parses the incoming MQTT message, extracts the key and value, and then forwards them to the main application through the commandCallback function pointer. The expected format of the incoming MQTT message is "key=value". The function checks for this format, and if valid, it splits the message into key and value components, trims any whitespace, and then calls the commandCallback with the parsed key and value. If the format is invalid, it logs an error message to the console. Note: The commandCallback should be set by the main application using the setCommandCallback method of the WiFiMQTT class for this mechanism to work. If no callback is set, incoming commands will be ignored after parsing. This function is registered with the MQTT client using mqtt.setCallback(mqttCallback) in the begin() method, ensuring that it will be called for any incoming messages on subscribed topics. 
- *  
- */ 
-comms.setCommandCallback([](const String& key, const String& value)
-{
-    Serial.println("[CMD] Key   = " + key);
-    Serial.println("[CMD] Value = " + value);
+    // ---------- MQTT Command Callback Registration ----------
+    // Incoming messages on subscribed topics arrive here.
+    // Format accepted:  key=value  or  JSON {"key":"value"}
+    comms.setCommandCallback([](const String& key, const String& value) {
+        // Log every received command for traceability
+        Serial.print(F("[CMD] Key   = ")); Serial.println(key);
+        Serial.print(F("[CMD] Value = ")); Serial.println(value);
 
-    // Validate value
-    if (value != "on" && value != "off") {
-        Serial.println("[CMD] ERROR: Unknown command value");
-        return;
-    }
+        // Strict input validation - only accept known states
+        if (value != "on" && value != "off") {
+            Serial.println(F("[CMD] ERROR: Unknown command value"));
+            return;
+        }
 
-    // Switch-like structure using if-else (strings cannot be used in switch)
-    if (key == "fan")
-    {
-        if (value == "on") {
-            digitalWrite(FAN_PIN, HIGH);            
-            Serial.println("[FAN] ON");
+        // ---------- Fan Control ----------
+        if (key == "fan") {
+            if (value == "on") {
+                digitalWrite(FAN_PIN, HIGH);
+                Serial.println(F("[FAN] ON"));
+            } else {
+                digitalWrite(FAN_PIN, LOW);
+                Serial.println(F("[FAN] OFF"));
+            }
         }
-        else { // value == "off"
-            digitalWrite(FAN_PIN, LOW);            
-            Serial.println("[FAN] OFF");
+        // ---------- Heater Control ----------
+        else if (key == "heater") {
+            if (value == "on") {
+                digitalWrite(HEATER_PIN, HIGH);
+                Serial.println(F("[HEATER] ON"));
+            } else {
+                digitalWrite(HEATER_PIN, LOW);
+                Serial.println(F("[HEATER] OFF"));
+            }
         }
-    }
-    else if (key == "heater")
-    {
-        if (value == "on") {
-            Serial.println("[HEATER] ON");
-            digitalWrite(HEATER_PIN, HIGH);  // if you add heater pin later
+        // ---------- Unknown Command ----------
+        else {
+            Serial.println(F("[CMD] ERROR: Unknown key"));
         }
-        else { // value == "off"
-            Serial.println("[HEATER] OFF");
-            digitalWrite(HEATER_PIN, LOW);
-        }
-    }
-    else
-    {
-        Serial.println("[CMD] ERROR: Unknown key");
-    }
-});
-comms.startTask(1, 8192, 1);   // priority 1, 8 KB stack, core 1
+    });
+
+    Serial.println(F("[INIT] System ready\n"));
 }
 
-/** 
- * Main loop function
- * Handles telemetry collection and transmission at specified intervals, and resets the watchdog timer to prevent system resets. It collects data from the DHT22 sensor, GPS module, and RTLS system at their respective intervals and sends the telemetry data to the MQTT broker. The loop also includes a small delay to prevent it from running too fast, which can help with power consumption and allow other tasks to run smoothly. The watchdog timer is reset at the beginning of each loop iteration to ensure that the system does not reset due to inactivity. 
-*/
+// ==============================================
+// MAIN LOOP - RUNS CONTINUOUSLY AFTER SETUP
+// Design principle: NON-BLOCKING - no function waits
+// ==============================================
 void loop() {
-     
-    // test CI/CD 
-    handle_serial(); // handle serial input for debugging or command input if needed
-
-    // Handle MQTT communication and reset watchdog timer to prevent system reset due to inactivity. This ensures that the device remains responsive and can recover from potential issues such as infinite loops or deadlocks. The MQTT loop function processes incoming messages and maintains the connection to the MQTT broker, while the watchdog reset ensures that the system can recover if it becomes unresponsive for any reason. This combination allows for robust operation of the IoT device while maintaining communication with the
-    // MQTT broker and ensuring system stability.  
+    // ---------- Step 1: Feed Watchdog FIRST ----------
+    // Must be called every loop pass - prevents unwanted reset
     esp_task_wdt_reset();
-    // Update sensors and send telemetry at specified intervals     
+
+    // ---------- Step 2: Serial Diagnostics ----------
+    // Check for incoming TEST_* commands over USB serial
+    // Returns immediately if nothing is available
+    handle_serial();
+
+    // ---------- Step 3: Get Reference Time ----------
+    // millis() returns milliseconds since power-on (rolls over ~every 49 days)
+    // Captured ONCE per loop so all checks use the same reference
+    unsigned long now = millis();
+
+    // ---------- Step 4: GPS Update (Every Pass) ----------
+    // GPS modules stream NMEA sentences continuously - must parse frequently
+    // Does not transmit, only reads incoming serial data
     GPS_update();
 
-    // Get the current time in milliseconds since the device started. This is used to determine when to collect and send telemetry data based on the defined intervals for each sensor. By comparing the current time with the last recorded time for each sensor, the loop can decide when to read new data and send it to the MQTT broker. This approach allows for efficient scheduling of sensor readings and data transmission without blocking the main loop, ensuring that the device remains responsive to incoming MQTT messages and other tasks.  
-    // Get current time for interval checks 
-    unsigned long now = millis();
-     
-    // Check if it's time to read from the DHT22 sensor and send telemetry data. 
-    // If the current time minus the last recorded time for the DHT22 sensor exceeds
-    //  the defined interval (DHT_INTERVAL), it creates a new JSON document, populates
-    //  it with the sensor data, and sends it to the MQTT broker. After sending the telemetry,
-    //  it updates the last recorded time for the DHT22 sensor to the current time. 
-    // This ensures that the DHT22 sensor data is collected and transmitted at regular 
-    // intervals without blocking the main loop. The same logic is applied for GPS and RTLS 
-    // data collection and transmission  in their respective intervals.   
+    // ---------- Step 5: DHT22 Telemetry (Every 5s) ----------
     if (now - lastDHT > DHT_INTERVAL) {
-        StaticJsonDocument<256> doc;
-        Serial.println("[DHT] Reading sensor data...");
-        doc["type"] = "dht";
-        doc["id"]   = DEVICE_ID;
-        doc["ts"]   = now;
-        Sensors_read(doc);
-        comms.sendTelemetry(doc);
-        lastDHT = now;
+        Serial.println(F("[DHT] Reading..."));
+        StaticJsonDocument<256> doc;  // Fixed-size buffer = predictable memory
+
+        // Standardised fields for all telemetry messages
+        doc["type"] = "dht";           // Identifies payload type
+        doc["id"]   = DEVICE_ID;       // Unique device instance
+        doc["ts"]   = now;             // Local timestamp (ms since boot)
+
+        Sensors_read(doc);             // Populate with temp & humidity
+        comms.sendTelemetry(doc);      // Enqueue - returns instantly, never blocks
+
+        lastDHT = now;                 // Update timestamp for next interval
     }
 
+    // ---------- Step 6: GPS Telemetry (Every 5s) ----------
     if (now - lastGPS > GPS_INTERVAL) {
-        Serial.println("[GPS] Reading sensor data...");
+        Serial.println(F("[GPS] Reading..."));
         StaticJsonDocument<256> doc;
+
         doc["type"] = "gps";
         doc["id"]   = DEVICE_ID;
         doc["ts"]   = now;
-        GPS_fill(doc);
+
+        GPS_fill(doc);                 // Add lat, lon, altitude, time
         comms.sendTelemetry(doc);
+
         lastGPS = now;
     }
 
+    // ---------- Step 7: RTLS Telemetry (Every 5s) ----------
     if (now - lastRTLS > RTLS_INTERVAL) {
-        Serial.println("[RTLS] Reading sensor data...");
-        RTLS_update();
+        Serial.println(F("[RTLS] Scanning..."));
+        RTLS_update();                 // Perform BLE scan
+
         StaticJsonDocument<256> doc;
         doc["type"] = "rtls";
         doc["id"]   = DEVICE_ID;
         doc["ts"]   = now;
-        RTLS_fill(doc);
+
+        RTLS_fill(doc);                // Add detected tags & signal strengths
         comms.sendTelemetry(doc);
+
         lastRTLS = now;
     }
-   
-    // Small delay to prevent the loop from running too fast, which can help with power consumption and allow other tasks to run smoothly. This also gives time for the MQTT loop to process incoming messages and maintain the connection to the MQTT broker without overwhelming the system. The delay can be adjusted based on the specific requirements of the application and the desired responsiveness of the device. In this case, a 5 millisecond delay is used as a balance between responsiveness and allowing other tasks to execute effectively.   
-    
+
+    // ---------- Step 8: Yield to Other Tasks ----------
+    // Short delay prevents the loop from consuming 100% CPU
+    // Gives background tasks (WiFi/BLE stack, idle) time to run
+    // 5ms = ~200Hz loop rate - plenty fast for all sensor needs
     delay(5);
 }
-
-// -------------------- COMMAND HANDLER --------------------
-void handle_serial() {
-  if (!Serial.available()) return;
-
-  String cmd = Serial.readStringUntil('\n');
-  cmd.trim();
-
-  // ---------- BASIC ----------
-  if (cmd == "PING") {
-    Serial.println("[TEST] PONG");
-  }
-  else if (cmd == "TEST_UPTIME") {
-    Serial.print("[TEST] UPTIME ");
-    Serial.println(millis());
-  }
-  else if (cmd == "TEST_PULSE") {
-    Serial.println("[TEST] PULSE_DONE");
-  }
-
-  // ---------- DHT ----------
-  else if (cmd == "TEST_DHT") {
-    StaticJsonDocument<64> doc;
-    Sensors_read(doc);
-    float t = doc["temperature"];
-    float h = doc["humidity"];
-
-    if (isnan(t) || isnan(h)) {
-      Serial.println("[TEST] {\"error\":\"sensor_fail\"}");
-      return;
-    }
-    Serial.printf("[TEST] {\"temperature\":%.2f,\"humidity\":%.2f}\n", t, h);
-  }
-
-  // ---------- GPS ----------
-  else if (cmd == "TEST_GPS") {
-    StaticJsonDocument<64> doc;
-    GPS_fill(doc);
-
-    if (!doc.containsKey("lat") || !doc.containsKey("lon")) {
-      Serial.println("[TEST] {\"error\":\"no_fix\"}");
-    } else {
-      float lat = doc["lat"];
-      float lon = doc["lon"];
-      Serial.printf("[TEST] {\"lat\":%.6f,\"lon\":%.6f}\n", lat, lon);
-    }
-  }
-
-  // ---------- RTLS ----------
-  else if (cmd == "TEST_RTLS") {
-    StaticJsonDocument<128> doc;
-    RTLS_fill(doc);
-
-    if (!doc.containsKey("rtls")) {
-      Serial.println("[TEST] {\"error\":\"rtls_fail\"}");
-      return;
-    }
-
-    JsonArray arr = doc["rtls"].as<JsonArray>();
-    Serial.print("[TEST] {\"rtls\":[");
-    for (size_t i = 0; i < arr.size(); i++) {
-      JsonObject tag = arr[i];
-      Serial.printf("{\"id\":\"%s\",\"rssi\":%d}",
-                    tag["id"].as<const char*>(),
-                    tag["rssi"].as<int>());
-      if (i < arr.size() - 1) Serial.print(",");
-    }
-    Serial.println("]}");
-  }
-
-  // ---------- WIFI ----------
-  else if (cmd == "TEST_WIFI") {
-    if (wifi_status == WIFI_STATUS_CONNECTED) {
-      Serial.println("[TEST] WIFI_OK");
-    } else {
-      Serial.println("[TEST] WIFI_FAIL");
-    }
-  }
-  else if (cmd == "TEST_WIFI_INFO") {
-    bool connected = (WiFi.status() == WL_CONNECTED);
-    Serial.printf("[TEST] {\"connected\":%s}\n", connected ? "true" : "false");
-  }
-
-  // ---------- MQTT ----------
-  else if (cmd == "TEST_MQTT") {
-    if (mqtt_status == MQTT_STATUS_CONNECTED) {
-      Serial.println("[TEST] MQTT_OK");
-    } else {
-      Serial.println("[TEST] MQTT_FAIL");
-    }
-  }
-  else if (cmd == "TEST_MQTT_PUB") {
-    // Python expects EXACT strings: MQTT_PUB_OK or MQTT_PUB_FAIL
-    if (mqtt_pub_status == MQTT_PUB_OK) {
-      Serial.println("[TEST] MQTT_PUB_OK");
-    } else {
-      Serial.println("[TEST] MQTT_PUB_FAIL");
-    }
-  }
-
-  // ---------- I2C ----------
-  else if (cmd == "TEST_I2C_SCAN") {
-    Serial.print("[TEST] {\"i2c\":[");
-    bool first = true;
-    for (uint8_t addr = 1; addr < 127; addr++) {
-      Wire.beginTransmission(addr);
-      if (Wire.endTransmission() == 0) {
-        if (!first) Serial.print(",");
-        Serial.print(addr);
-        first = false;
-      }
-    }
-    Serial.println("]}");
-  }
-  else if (cmd == "TEST_I2C_READ") {
-    uint8_t addr = 0x40;
-    uint8_t value = 0;
-
-    Wire.beginTransmission(addr);
-    Wire.write(0x00);
-    if (Wire.endTransmission(false) == 0 && Wire.requestFrom(addr, (uint8_t)1) == 1) {
-      value = Wire.read();
-      Serial.printf("[TEST] {\"i2c_read\":{\"value\":%u}}\n", value);
-    } else {
-      Serial.println("[TEST] {\"i2c_read\":{\"error\":\"no_device\"}}");
-    }
-  }
-
-  // ---------- FLASH ----------
-  else if (cmd == "TEST_FLASH") {
-    uint32_t size = ESP.getFlashChipSize();
-    Serial.printf("[TEST] FLASH_SIZE %u\n", size);
-  }
-
-  // ---------- RTC ----------
-  else if (cmd == "TEST_RTC") {
-    time_t now = time(nullptr);
-    Serial.printf("[TEST] RTC %ld\n", (long)now);
-  }
-
-  // ---------- ADC ----------
-  else if (cmd == "TEST_ADC") {
-    int val = analogRead(34);
-    Serial.printf("[TEST] ADC %d\n", val);
-  }
-
-  // ---------- SPI ----------
-  else if (cmd == "TEST_SPI") {
-    Serial.println("[TEST] SPI OK");
-  }
-  else if (cmd == "TEST_SPI_LOOP") {
-    uint8_t send = 42;
-    uint8_t recv = SPI.transfer(send);
-    bool ok = (send == recv);
-
-    Serial.printf("[TEST] {\"sent\":%u,\"received\":%u,\"loop_ok\":%s}\n",
-                  send, recv, ok ? "true" : "false");
-  }
-
-  // ---------- UART ----------
-  else if (cmd == "TEST_UART") {
-    Serial.println("[TEST] UART OK");
-  }
-
-  // ---------- BLE / BT ----------
-  else if (cmd == "TEST_BLE") {
-    Serial.println("[TEST] BLE OK");
-  }
-  else if (cmd == "TEST_BT") {
-    Serial.println("[TEST] BT OK");
-  }
-  else if (cmd == "TEST_BLE_MATCH") {
-    Serial.println("[TEST] {\"found\":false,\"rtls\":[]}");
-  }
-
-  // ---------- PROTO ----------
-  else if (cmd == "TEST_PROTO") {
-    Serial.println("[TEST] PROTO OK");
-  }
-
-  // ---------- RESET ----------
-  else if (cmd == "TEST_RESET") {
-    Serial.println("[TEST] RESET_OK");
-    // ESP.restart();
-  }
-}
-
-
-
