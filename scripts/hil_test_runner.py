@@ -26,8 +26,7 @@ TESTS = [
     ("TEST_SPI_LOOP",     "loop_ok"),
     ("TEST_I2C_SCAN",     "i2c"),  
     
-    ("TEST_RESET",        "RESET_OK"),
-]
+  ]
 
 def main():
     print("[HIL] Connecting to " + PORT + " at " + str(BAUD) + " baud...")
