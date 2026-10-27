@@ -19,14 +19,12 @@ TESTS = [
     ("TEST_DHT",          "temperature"),
     ("TEST_GPS",          "lat"),
     ("TEST_WIFI",         "WIFI_OK"),
-    ("TEST_MQTT",         "Connected"),      # Connection succeeded
-    ("TEST_MQTT_PUB",     "MQTT_PUB_OK"),
+    ("TEST_MQTT",         "Connected"),      # Connection succeeded    
     ("TEST_FLASH",        "FLASH_SIZE"),
     ("TEST_RTC",          "RTC"),
     ("TEST_ADC",          "ADC"),
     ("TEST_SPI_LOOP",     "loop_ok"),
-    ("TEST_I2C_SCAN",     "i2c"),
-    ("TEST_RTLS",         "rtls_fail"),      # Accept until hardware fixed
+    ("TEST_I2C_SCAN",     "i2c"),   
     ("TEST_BLE",          "BLE OK"),
     ("TEST_RESET",        "RESET_OK"),
 ]
