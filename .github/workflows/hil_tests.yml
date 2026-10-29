@@ -1,112 +1,58 @@
-name: ESP32 HIL Pipeline
-
+name: 🔌 ESP32 HIL Pipeline
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+      - freertos-tasks
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+      - freertos-tasks
+  workflow_dispatch:
 
 jobs:
   hil_test:
-    runs-on: self-hosted
+    name: Build → Flash → Test → Report
+    runs-on:
+      - self-hosted
+      - esp32_iot_rtos
+    timeout-minutes: 15
 
     steps:
-      # ------------------------------------------------------------
-      # CLEAN WORKSPACE
-      # ------------------------------------------------------------
-      - name: Clean workspace safely
-        shell: powershell
-        run: |
-          Set-Location $env:GITHUB_WORKSPACE
-          Get-ChildItem -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-
-      # ------------------------------------------------------------
-      # CHECKOUT
-      # ------------------------------------------------------------
-      - name: Checkout repository
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------
-      # PYTHON SETUP
-      # ------------------------------------------------------------
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11.7"
+      - name: 📁 Create output directories
+        run: mkdir -p docs scripts
 
-      - name: Verify Python version
-        run: python --version
+      - name: 🛠️ Install dependencies
+        run: pip install platformio pyserial matplotlib
 
-      - name: Install Python dependencies
-        run: |
-          pip install --upgrade pip
-          pip install pytest pyserial junit-xml pytest-html
+      - name: 🔨 Build firmware
+        run: pio run
 
-      # ------------------------------------------------------------
-      # PLATFORMIO
-      # ------------------------------------------------------------
-      - name: Install PlatformIO
-        run: pip install platformio
+      - name: ⚡ Flash to ESP32
+        run: pio run -t upload
 
-      - name: Build HIL test firmware
-        run: platformio run -e hil_test
+      - name: 🧪 Run HIL serial tests
+        id: test_run
+        run: python scripts/hil_test_runner.py
+        env:
+          SERIAL_PORT: COM7
+          SERIAL_BAUD: 115200
+          PYTHONIOENCODING: utf-8
 
-      - name: Flash HIL test firmware
-        run: platformio run -e hil_test -t upload
+      - name: 📊 Generate Report & Graphs
+        run: python scripts/generate_report.py
 
-      # ------------------------------------------------------------
-      # EMBEDDED DEVELOPER DELAYS (IMPORTANT)
-      # ------------------------------------------------------------
-      - name: Allow ESP32 USB/Serial to re-enumerate
-        shell: powershell
-        run: Start-Sleep -Seconds 5
-
-      - name: Start Mosquitto MQTT broker
-        shell: powershell
-        run: |
-          Start-Process -FilePath "C:\Program Files\mosquitto\mosquitto.exe" `
-            -ArgumentList '-c "C:\Program Files\mosquitto\mosquitto_local.conf" -v'
-          Start-Sleep -Seconds 3
-
-      - name: Wait for ESP32 reboot + serial settle
-        shell: powershell
-        run: Start-Sleep -Seconds 25
-
-      # ------------------------------------------------------------
-      # RUN TESTS (HTML + XML REPORTS)
-      # ------------------------------------------------------------
-      - name: Run HIL tests and generate reports
-        run: |
-          pytest -v `
-            --junitxml=hil_report.xml `
-            --html=hil_report.html `
-            --self-contained-html
-
-      # ------------------------------------------------------------
-      # ARTIFACTS
-      # ------------------------------------------------------------
-      - name: Upload JUnit XML Report
+      - name: 📤 Upload Test Report Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hil-xml-report
-          path: hil_report.xml
-
-      - name: Upload HTML Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: hil-html-report
-          path: hil_report.html
-
-      # ------------------------------------------------------------
-      # SUMMARY
-      # ------------------------------------------------------------
-      - name: Add summary to GitHub Actions UI
-        shell: powershell
-        run: |
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## ESP32 HIL Test Summary"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**Firmware:** hil_test"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**HTML Report:** Download from the 'hil-html-report' artifact"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**JUnit XML:** Download from the 'hil-xml-report' artifact"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "All HIL tests executed successfully. Reports are attached as artifacts."
+          name: hil-test-report-${{ github.run_id }}
+          path: |
+            docs/REPORT.html
+            docs/test_results.png
+            docs/gap_comparison.png
+            docs/lost_messages.png
+          retention-days: 30

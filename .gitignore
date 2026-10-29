@@ -5,3 +5,5 @@
 .vscode/ipch
 secrets_new.h
 
+
+src/secrets_new.h
