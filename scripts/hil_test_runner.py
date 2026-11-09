@@ -25,7 +25,7 @@ TESTS = [
     ("TEST_ADC",          "ADC"),
     ("TEST_SPI_LOOP",     "loop_ok"),
     ("TEST_I2C_SCAN",     "i2c"),  
-    
+        # more tests here as needed    
   ]
 
 def main():

@@ -42,8 +42,6 @@ static const size_t TX_QUEUE_LEN = 64;
 BackendType backend = BACKEND_NODE_RED;
 
 
-
-
 // Static instance pointer for static callback trampoline
 WiFiMQTT* WiFiMQTT::instance = nullptr;
 
@@ -61,7 +59,6 @@ WiFiMQTT::WiFiMQTT()
 , _taskHandle(nullptr)
 {
 }
-
 
 
 WIFI_STATUS wifi_status = WIFI_STATUS_DISCONNECTED;
@@ -203,7 +200,6 @@ void WiFiMQTT::ensureMqtt() {
     } else {
         Serial.printf("[MQTT] Failed. State=%d\n", _mqtt.state());
             mqtt_status = MQTT_STATUS_DISCONNECTED;
-
         // Exponential backoff (max 60s)
         _mqttBackoffMs = min<uint32_t>(_mqttBackoffMs * 2, 60000);
     }

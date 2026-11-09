@@ -6,5 +6,3 @@
 
 // Call this from your main loop() — it reads Serial and runs matching tests
 void handle_serial();
-
-#endif // TEST_COMMANDS_H
