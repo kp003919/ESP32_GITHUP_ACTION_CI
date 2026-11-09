@@ -9,7 +9,9 @@
 #include <PubSubClient.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/queue.h>
 
+#include <time.h>
 #include "spi_driver.h"
 #include "uart_driver.h"
 #include "I2C_Driver.h"
@@ -64,6 +66,13 @@ extern BackendType backend;
 extern WIFI_STATUS wifi_status;
 extern MQTT_STATUS mqtt_status;
 extern MQTT_PUB_STATUS mqtt_pub_status;
+
+
+// WIFE and MQTT status enums
+extern WIFI_STATUS  wifi_status;
+extern MQTT_STATUS  mqtt_status;
+extern MQTT_PUB_STATUS mqtt_pub_status;
+
 
 /**
  * WiFiMQTT Class
@@ -167,6 +176,11 @@ private:
     uint32_t          _mqttBackoffMs = 1000;
 
     TaskHandle_t      _taskHandle = nullptr;
+    QueueHandle_t _txQueue = nullptr;
+    uint32_t      _dropped = 0;
+    bool enqueue(const char* topic, const JsonDocument& doc);
+    void drainQueue();
+
     
     // Private methods for internal operations  
     void configureMQTT();

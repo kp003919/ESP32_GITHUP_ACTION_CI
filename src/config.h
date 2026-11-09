@@ -15,7 +15,8 @@
 
 // MQTT broker
 #define MQTT_BROKER "192.168.0.21"
-#define MQTT_PORT   1883  // secure port 
+#define USE_MQTT_TLS 1 
+#define MQTT_PORT   8883  // TLS port
 
 // DHT config
 #define DHTPIN  3        // GPIO 3 is safe

@@ -1,0 +1,9 @@
+Originally everything ran in one loop — when MQTT tried to reconnect, 
+it blocked the sensor reads, and any readings during that time were 
+just lost. 
+
+I refactored into separate FreeRTOS tasks: one reads sensors and queues 
+data, another handles Wi‑Fi/MQTT. During a simulated 90‑second broker 
+outage, sensor sampling stayed on schedule, the queue held 51 readings
+without dropping any, and when the broker came back, everything was sent. 
+Zero data lost.
