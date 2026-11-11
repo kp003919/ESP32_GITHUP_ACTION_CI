@@ -22,6 +22,7 @@ jobs:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
 
+
       - name: 🔑 Copy secrets file
         run: Copy-Item C:\Users\great\ci-secrets\secrets_new.h src\secrets_new.h
 
@@ -44,9 +45,6 @@ jobs:
           SERIAL_PORT: COM7
           SERIAL_BAUD: 115200
           PYTHONIOENCODING: utf-8
-
-      - name: 📊 Generate Report & Graphs
-        run: python scripts/generate_report.py
 
       - name: 📤 Upload Test Report Artifacts
         if: always()
